@@ -145,9 +145,25 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Build the profiling APK
+        timeout-minutes: 20
         run: |
-          ./gradlew :app:assembleDebug -Pprofile --console=plain > "$RUNNER_TEMP/build.log" 2>&1             || { tail -60 "$RUNNER_TEMP/build.log"; exit 1; }
+          # A cold runner has to fetch the NDK and CMake; that fetch failed once already, so one
+          # retry, and keep the log where the artifact can reach it.
+          set -o pipefail
+          status=1
+          for attempt in 1 2; do
+            if ./gradlew :app:assembleDebug -Pprofile --console=plain 2>&1 | tee "$RUNNER_TEMP/build.log"; then
+              status=0
+              break
+            fi
+            echo "build failed on attempt $attempt"
+            tail -40 "$RUNNER_TEMP/build.log"
+            sleep 10
+          done
           tail -3 "$RUNNER_TEMP/build.log"
+          mkdir -p "$RUNNER_TEMP/profile-run"
+          cp "$RUNNER_TEMP/build.log" "$RUNNER_TEMP/profile-run/build.log" || true
+          exit $status
       - name: Boot an emulator, fetch the voices, profile, export
         run: |
           set -eu
@@ -224,16 +240,19 @@ jobs:
           grep -q '=== profile' "$OUT/profiling.txt"
       - name: Keep the logcat and the file listings
         if: always()
+        timeout-minutes: 4
         run: |
           OUT="$RUNNER_TEMP/profile-run"
           mkdir -p "$OUT"
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           ADB="$SDK/platform-tools/adb"
           [ -x "$ADB" ] || ADB=adb
-          "$ADB" logcat -d > "$OUT/logcat.txt" 2>&1 || true
-          "$ADB" shell run-as org.sapidroid.tts ls -l /data/user_de/0/org.sapidroid.tts/files/sapi5 > "$OUT/sapi5-files.txt" 2>&1 || true
-          "$ADB" shell run-as org.sapidroid.tts ls -l /data/user_de/0/org.sapidroid.tts/files/voice > "$OUT/voice-files.txt" 2>&1 || true
-          "$ADB" shell am start -W -n org.sapidroid.tts/.MainActivity > "$OUT/launch.txt" 2>&1 || true
+          cp "$RUNNER_TEMP/emulator.log" "$OUT/emulator.log" 2> /dev/null || true
+          cp "$RUNNER_TEMP/build.log" "$OUT/build.log" 2> /dev/null || true
+          timeout 40 "$ADB" logcat -d > "$OUT/logcat.txt" 2>&1 || true
+          timeout 40 "$ADB" shell run-as org.sapidroid.tts ls -l /data/user_de/0/org.sapidroid.tts/files/sapi5 > "$OUT/sapi5-files.txt" 2>&1 || true
+          timeout 40 "$ADB" shell run-as org.sapidroid.tts ls -l /data/user_de/0/org.sapidroid.tts/files/voice > "$OUT/voice-files.txt" 2>&1 || true
+          ls -l "$OUT"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
