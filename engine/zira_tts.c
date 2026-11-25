@@ -8,6 +8,7 @@
 #include "zira_tts.h"
 
 #include "zb.h"
+#include "zb_atomic.h"
 #include "zf.h"
 #include "zf2.h"
 
@@ -100,7 +101,7 @@ void zira_tts_set_rate(zira_tts *t, int rate)
 
 void zira_tts_set_volume(zira_tts *t, int volume) { t->sapi.volume = volume < 0 ? 0 : volume > 100 ? 100 : volume; }
 void zira_tts_set_pitch(zira_tts *t, int pitch) { t->pitch = pitch < -10 ? -10 : pitch > 10 ? 10 : pitch; }
-void zira_tts_cancel(zira_tts *t) { t->cancel = 1; }
+void zira_tts_cancel(zira_tts *t) { zb_cancel_store(&t->cancel, 1); }
 
 int zira_tts_set_emotion(zira_tts *t, const char *name)
 {
@@ -194,10 +195,10 @@ static void deliver(speak_ctx *c, const short *pcm, long n)
     long i;
     for (i = 0; i < n && !c->stopped; ) {
         long k = n - i < CHUNK ? n - i : CHUNK;
-        if (c->t->cancel) { c->stopped = 1; break; }
+        if (zb_cancel_load(&c->t->cancel)) { c->stopped = 1; break; }
         if (c->cb->audio && c->cb->audio(pcm + i, (size_t)k, c->cb->user)) {
             c->stopped = 1;
-            c->t->cancel = 1;
+            zb_cancel_store(&c->t->cancel, 1);
         }
         i += k;
         c->base += (uint64_t)k;
@@ -262,7 +263,7 @@ static void apply_controls(const zira_tts *t, ZbUtt *u)
 static int speak_piece(zira_tts *t, speak_ctx *c, const char *piece, int xml, ZbVoice *vb, zf2_voice *vf)
 {
     zf_sentence s;
-    int rc = 0;
+    int rc = 0, next;
     long nmap = 0;
     long *map = c->cb->event ? utf16_to_utf8_map(piece, &nmap) : NULL;
     if (c->cb->event && !map) return -1;
@@ -270,20 +271,27 @@ static int speak_piece(zira_tts *t, speak_ctx *c, const char *piece, int xml, Zb
     c->nmap = nmap;
     if (zb_emotion(vb, t->emotion, &t->sapi.style)) memset(&t->sapi.style, 0, sizeof t->sapi.style);
     if (zf1_speak_utf8(t->e, piece, xml) < 0) rc = -1;
-    while (!rc && !t->cancel && !c->stopped && zf1_next_sentence(t->e, &s) == 1) {
+    while (!rc && !zb_cancel_load(&t->cancel) && !c->stopped) {
         ZbUtt u;
         zf2_events ev;
         ZbTrace tr;
+        next = zf1_next_sentence(t->e, &s);
+        if (next != 1) {
+            if (next < 0) rc = -1;
+            break;
+        }
         memset(&u, 0, sizeof u);
         memset(&ev, 0, sizeof ev);
         memset(&tr, 0, sizeof tr);
-        if (zf2_process(vf, &s, &u, c->cb->event ? &ev : NULL) == 0 && u.nphone > 0) {
+        if (zf2_process(vf, &s, &u, c->cb->event ? &ev : NULL) != 0) {
+            rc = -1;
+        } else if (u.nphone > 0) {
             apply_controls(t, &u);
             c->ev = c->cb->event ? &ev : NULL;
             c->tr = c->cb->event ? &tr : NULL;
             int synth_rc = zb_synth_cancelable(vb, &u, &t->sapi, sink, c,
                                                c->cb->event ? &tr : NULL, &t->cancel);
-            if (synth_rc && !c->stopped && !t->cancel) rc = -1;
+            if (synth_rc && !c->stopped && !zb_cancel_load(&t->cancel)) rc = -1;
             c->ev = NULL;
             c->tr = NULL;
             zb_trace_free(&tr);
@@ -311,14 +319,14 @@ int zira_tts_speak(zira_tts *t, const char *utf8, int flags, const zira_callback
     memset(&c, 0, sizeof c);
     c.t = t;
     c.cb = cb;
-    t->cancel = 0;
+    zb_cancel_store(&t->cancel, 0);
     work = (char *)malloc(strlen(utf8) + 1);
     if (!work) return -1;
     strcpy(work, utf8);
     p = work;
     /* SAPI hands <lang langid="..."> ... </lang> to the language's default voice as a separate job, keeping the
        gender: a male voice switches to David, Zira (female) stays herself.  Same rule as zira_say.c. */
-    while (*p && !rc && !t->cancel && !c.stopped) {
+    while (*p && !rc && !zb_cancel_load(&t->cancel) && !c.stopped) {
         char *tag = xml && t->male ? strstr(p, "<lang") : NULL, *piece = p, *end = NULL;
         int david = 0;
         if (tag == p) {
@@ -328,7 +336,7 @@ int zira_tts_speak(zira_tts *t, const char *utf8, int flags, const zira_callback
                 piece = gt + 1;
                 end = close + 7;
                 david = 1;
-            }
+            } else tag = NULL;
         }
         if (!david) {
             if (tag) { *tag = 0; end = tag; }
@@ -350,7 +358,7 @@ int zira_tts_speak(zira_tts *t, const char *utf8, int flags, const zira_callback
         else p = end;
     }
     free(work);
-    if (rc == 0 && (t->cancel || c.stopped)) rc = 1;
+    if (rc == 0 && (zb_cancel_load(&t->cancel) || c.stopped)) rc = 1;
     if (rc == 0 && cb->event) {
         zira_event e;
         memset(&e, 0, sizeof e);

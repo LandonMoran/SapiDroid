@@ -1,5 +1,6 @@
 import java.io.ByteArrayOutputStream;
 import java.util.Arrays;
+import java.nio.charset.StandardCharsets;
 
 public class PcmStreamTest {
     public interface Sink {
@@ -7,9 +8,14 @@ public class PcmStreamTest {
     }
 
     private static native int emit(Sink sink);
+    private static native byte[] encode(String text);
 
     public static void main(String[] args) {
         System.load(args[0]);
+        byte[] text = encode("A\u00e9\u20ac\ud83d\ude00\0B\ud800C\udc00");
+        byte[] expectedText = "A\u00e9\u20ac\ud83d\ude00 B\ufffdC\ufffd".getBytes(StandardCharsets.UTF_8);
+        if (!Arrays.equals(expectedText, text) || encode("").length != 0)
+            throw new AssertionError("incorrect speech text UTF-8");
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         int[] calls = {0};
         boolean[] returned = {false};

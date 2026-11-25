@@ -104,10 +104,10 @@ object VoiceDataInstaller {
             if (names.size < 8) {
                 throw java.io.IOException("only ${names.size} of 8 voice files were found")
             }
-            return names
             // Success: the downloaded installer and the cabinet are no longer needed.
             exe.delete()
             cab.delete()
+            return names
         } finally {
             cab.delete()
         }

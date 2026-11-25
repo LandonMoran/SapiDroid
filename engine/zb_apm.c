@@ -169,10 +169,13 @@ int zb_apm_load(ZbVoice *v, const char *path, char *err, int errlen)
     p = d + moff;
     nmod = rd32(p);
     if (nmod > 8) { snprintf(err, errlen, "too many models"); return -1; }
+    if (!apm_has(v, p, 4 + 8 * (size_t)nmod)) {
+        snprintf(err, errlen, "APM model directory truncated"); return -1;
+    }
     v->nmodel = (int)nmod;
     for (i = 0; i < nmod; i++) {
         ZbModel *m = &v->model[i];
-        uint32_t modoff = moff + rd32(p + 4 + 8 * i);
+        uint64_t modoff = (uint64_t)moff + rd32(p + 4 + 8 * i);
         const uint8_t *mb, *q, *t;
         uint32_t n, w, j, treeoff, pooloff, blob;
         if (modoff >= v->apmsize) { snprintf(err, errlen, "APM model %u beyond end of file", i); return -1; }
@@ -230,12 +233,12 @@ int zb_apm_load(ZbVoice *v, const char *path, char *err, int errlen)
                 m->gen_mean = rdf(q + 12 + 4 * len);
             }
         }
-        m->tree = mb + treeoff;
-        m->pool = mb + pooloff;
         if (treeoff >= m->mbsize || pooloff >= m->mbsize ||
             (uint64_t)pooloff + m->poolsize > m->mbsize) {
             snprintf(err, errlen, "APM model %u tree/pool outside the model", i); return -1;
         }
+        m->tree = mb + treeoff;
+        m->pool = mb + pooloff;
         t = m->tree;
         if (!apm_has(v, t, 8)) { snprintf(err, errlen, "APM model %u tree truncated", i); return -1; }
         m->ntree = (int)rd32(t);
@@ -251,7 +254,7 @@ int zb_apm_load(ZbVoice *v, const char *path, char *err, int errlen)
             m->treeid[j] = (int32_t)rd32(t);
             for (s = 0; s < m->nstate; s++) {
                 m->suboff[j * m->nstate + s] = rd32(t + 4 + 8 * s);
-                if (m->suboff[j * m->nstate + s] >= m->mbsize) {
+                if (m->suboff[j * m->nstate + s] >= m->mbsize - treeoff) {
                     snprintf(err, errlen, "APM model %u subtree %u outside the model", i, j); return -1;
                 }
             }
@@ -354,10 +357,12 @@ int zb_state_gauss(const ZbVoice *v, const ZbModel *m, const uint8_t *leaf, ZbGa
     g->wmax = 0.0f;
     for (s = 0; s < m->nstream; s++) {
         uint32_t off = rd32(leaf + 4 + 4 * s);
-        const uint8_t *e = m->pool + off;
+        const uint8_t *e;
         int dim = m->streamdim[s];
-        float w = rdf(e);
-        if (off + 4 + 8 * (uint32_t)dim > m->poolsize || n + dim > ZB_MAXDIM) return -1;
+        float w;
+        if (dim < 0 || dim > ZB_MAXDIM - n || (uint64_t)off + 4 + 8 * (uint64_t)dim > m->poolsize) return -1;
+        e = m->pool + off;
+        w = rdf(e);
         if (s == 0) g->w = w;
         if (w > g->wmax) g->wmax = w;
         for (k = 0; k < dim; k++) {

@@ -95,8 +95,12 @@ object CabExtractor {
                             raf.readFully(cf)
                             val cbData = u16(cf, 4)
                             val cbUncomp = u16(cf, 6)
+                            if (cbData < 2) throw IOException("invalid MSZIP block")
                             val payload = ByteArray(cbData)
                             raf.readFully(payload)
+                            if (payload[0] != 'C'.code.toByte() || payload[1] != 'K'.code.toByte()) {
+                                throw IOException("invalid MSZIP signature")
+                            }
                             blockPos += 8 + cbData + reservedData
                             block++
 
@@ -108,11 +112,13 @@ object CabExtractor {
                             while (!inflater.finished()) {
                                 val n = inflater.inflate(out, outLen, out.size - outLen)
                                 if (n == 0) {
-                                    if (inflater.needsInput() || inflater.needsDictionary()) break
+                                    if (inflater.finished()) break
+                                    throw IOException("incomplete or oversized MSZIP block")
                                 } else {
                                     outLen += n
                                 }
                             }
+                            if (outLen != cbUncomp) throw IOException("incorrect MSZIP block size")
 
                             for ((entry, outName, dest) in mine) {
                                 val a = maxOf(entry.start, folderOffset)
@@ -133,6 +139,7 @@ object CabExtractor {
                             dict = if (combined.size <= 32768) combined
                             else combined.copyOfRange(combined.size - 32768, combined.size)
                         }
+                        if (folderOffset < lastNeeded) throw IOException("cabinet folder is incomplete")
                     } finally {
                         inflater.end()
                     }

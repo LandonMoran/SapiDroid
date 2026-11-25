@@ -318,6 +318,13 @@ void fe_text_item(FrontEnd *fe, FeThreadFrame *f) {
     if (f->item.data) vc_free(GP(void, f->item.data));
     f->item.data = 0;
     for (;;) {
+        if (vc_WaitForSingleObject(fe->abort_event, 0) == 0) {
+            words_abort(fe->words);
+            fe_text_end(fe);
+            vc_free(GP(char, fe->text));
+            GPSET(fe->text, NULL);
+            return;
+        }
         if (GP(char, fe->next) > GP(char, fe->text_last) + 1) {
             vc_free(GP(char, fe->text));
             return;
@@ -327,7 +334,10 @@ void fe_text_item(FrontEnd *fe, FeThreadFrame *f) {
                 int32_t n = words_phrase(fe->words);
                 if (vc_WaitForMultipleObjects(2, f->h2, 0, 0xffffffffu) == 0) {
                     words_abort(fe->words);
-                    break;
+                    fe_text_end(fe);
+                    vc_free(GP(char, fe->text));
+                    GPSET(fe->text, NULL);
+                    return;
                 }
                 fe_phrase_out(fe, n);
                 f->res = fe_continue(fe);

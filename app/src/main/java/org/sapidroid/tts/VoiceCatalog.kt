@@ -95,7 +95,7 @@ object VoiceCatalog {
     /** Device-protected storage, so the default voice survives Direct Boot. */
     private fun storage(context: Context): Context = DeviceStorage.context(context)
 
-    fun savedVoice(context: Context, voices: List<Info> = installed(context)): Info? {
+    @Synchronized fun savedVoice(context: Context, voices: List<Info> = installed(context)): Info? {
         // In-memory cache first: the picker's choice is visible to the next
         // utterance in this process without waiting on disk I/O.
         val store = storage(context)
@@ -114,7 +114,7 @@ object VoiceCatalog {
      * disk write must target device-protected storage too, or a reboot
      * before unlock would forget the voice on the lock screen.
      */
-    fun saveVoice(context: Context, info: Info) {
+    @Synchronized fun saveVoice(context: Context, info: Info) {
         cachedDefaultLabel = info.label
         defaultCacheValid = true
         storage(context).getSharedPreferences(PREFS, Context.MODE_PRIVATE)

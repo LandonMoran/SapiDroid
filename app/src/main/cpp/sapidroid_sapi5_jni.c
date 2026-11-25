@@ -6,6 +6,7 @@
 #include <string.h>
 #include "sam_tts.h"
 #include "pcm_stream.h"
+#include "jni_text.h"
 
 JNIEXPORT jlong JNICALL
 Java_org_sapidroid_tts_NativeSapi5_open(JNIEnv *env, jclass clazz,
@@ -13,7 +14,12 @@ Java_org_sapidroid_tts_NativeSapi5_open(JNIEnv *env, jclass clazz,
     (void)clazz;
     if (!dataDir || !voice) return 0;
     const char *d = (*env)->GetStringUTFChars(env, dataDir, NULL);
+    if (!d) return 0;
     const char *v = (*env)->GetStringUTFChars(env, voice, NULL);
+    if (!v) {
+        (*env)->ReleaseStringUTFChars(env, dataDir, d);
+        return 0;
+    }
     char err[256];
     err[0] = 0;
     sam_speech *t = sam_tts_open(d, v, err, sizeof err);
@@ -61,7 +67,7 @@ Java_org_sapidroid_tts_NativeSapi5_speak(JNIEnv *env, jclass clazz, jlong h, jst
     if (!h || !text) return -1;
     pcm_stream stream;
     if (pcm_stream_init(&stream, env, sink)) return -1;
-    const char *c_text = (*env)->GetStringUTFChars(env, text, NULL);
+    char *c_text = jni_text_utf8(env, text);
     if (!c_text) return -1;
 
     sam_callbacks cb;
@@ -70,7 +76,7 @@ Java_org_sapidroid_tts_NativeSapi5_speak(JNIEnv *env, jclass clazz, jlong h, jst
     cb.user = &stream;
 
     int rc = sam_tts_speak((sam_speech *)(intptr_t)h, c_text, 0, &cb);
-    (*env)->ReleaseStringUTFChars(env, text, c_text);
+    free(c_text);
 
     if (rc < 0) {
         __android_log_print(4, "SapiDroidSapi5", "speak failed rc=%d", rc);

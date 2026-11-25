@@ -19,6 +19,7 @@
  * if the build breaks these rules.
  */
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1298,11 +1299,13 @@ static long decode_block(anna_decoder *d, long k, int keep, size_t *have)
 
 int anna_decoder_read(anna_decoder *d, long start, long n, int16_t *out)
 {
-    long lo = 0, hi = d->nblk, b, k;
+    long lo = 0, hi, b, k;
     size_t have = 0;
     long long off;
     long i;
-    if (n <= 0) return 0;
+    if (!d || start < 0 || n < 0 || (n > 0 && (!out || start > LONG_MAX - n))) return -1;
+    if (n == 0) return 0;
+    hi = d->nblk;
     while (hi - lo > 1) { /* last block with pos <= start */
         long m = (lo + hi) / 2;
         if (d->pos[m] <= start) lo = m;

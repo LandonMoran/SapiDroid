@@ -229,7 +229,8 @@ void zb_trace_free(ZbTrace *t);
 
 /* Synthesize one sentence (utterance). Streams PCM to write(). Returns 0 on success. */
 int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace);
-/* Like zb_synth, but returns 1 promptly when cancel becomes nonzero. */
+/* Like zb_synth, but returns 1 promptly when cancel becomes nonzero. Concurrent writers must use
+ * atomic integer stores (for example __atomic_store_n with GCC/Clang, or InterlockedExchange on Windows). */
 int zb_synth_cancelable(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user,
                         ZbTrace *trace, const volatile int *cancel);
 

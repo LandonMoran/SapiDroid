@@ -7,6 +7,7 @@
  */
 #include "sam_tts.h"
 #include "sam.h"
+#include "sam_internal.h"
 #include "sam4fx.h"
 
 #include <ctype.h>
@@ -101,7 +102,10 @@ void sam_tts_close(sam_speech *t)
 void sam_tts_set_rate(sam_speech *t, int rate) { t->rate = rate < -10 ? -10 : rate > 18 ? 18 : rate; }
 void sam_tts_set_volume(sam_speech *t, int v) { t->volume = v < 0 ? 0 : v > 100 ? 100 : v; }
 void sam_tts_set_pitch(sam_speech *t, int p) { t->pitch = p < -10 ? -10 : p > 10 ? 10 : p; }
-void sam_tts_cancel(sam_speech *t) { t->cancel = 1; }
+void sam_tts_cancel(sam_speech *t)
+{
+    if (t) sam_cancel_set(&t->cancel, 1);
+}
 int sam_tts_sample_rate(const sam_speech *t)
 {
     return t && t->p.out_rate > 0 ? t->p.out_rate : SAM_TTS_SAMPLE_RATE;
@@ -529,7 +533,7 @@ static void deliver_audio(sam_speech *t, const int16_t *pcm, size_t n)
 {
     if (t->cb->audio && t->cb->audio(pcm, n, t->cb->user)) {
         t->stopped = 1;
-        t->cancel = 1;
+        sam_cancel_set(&t->cancel, 1);
     }
     t->base += n;
 }
@@ -558,15 +562,19 @@ static void on_pcm(const int16_t *pcm, size_t n, void *user)
         deliver_audio(c->t, pcm, n);
         return;
     }
-    b = malloc(n * sizeof *b);
-    if (!b) {
-        c->t->stopped = 1;
-        c->t->cancel = 1;
-        return;
+    {
+        int16_t local[1024];
+        int allocated = n > sizeof local / sizeof *local;
+        b = allocated ? malloc(n * sizeof *b) : local;
+        if (!b) {
+            c->t->stopped = 1;
+            sam_cancel_set(&c->t->cancel, 1);
+            return;
+        }
+        memcpy(b, pcm, n * sizeof *b);
+        deliver(c->t, b, n, c->volume);
+        if (allocated) free(b);
     }
-    memcpy(b, pcm, n * sizeof *b);
-    deliver(c->t, b, n, c->volume);
-    free(b);
 }
 
 static void silence(sam_speech *t, size_t n, int volume)
@@ -588,7 +596,7 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
     char *run = NULL;
     long runcap = 0;
     if (!t || !utf8 || !cb) return -1;
-    t->cancel = 0;
+    sam_cancel_set(&t->cancel, 0);
     t->stopped = 0;
     t->base = 0;
     t->cb = cb;
@@ -608,7 +616,7 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
             }
         }
     }
-    for (i = 0; i < d->nop && rc == 0 && !t->cancel; i++) {
+    for (i = 0; i < d->nop && rc == 0 && !sam_cancelled(&t->cancel); i++) {
         const xop *o = &d->ops[i];
         sam_speak_opts so;
         pcm_ctx pc;
@@ -653,7 +661,7 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
         pc.t = t;
         pc.volume = o->volume < 0 ? 0 : o->volume > 100 ? 100 : o->volume;
         rc = sam_tts_speak_ex(t->eng, run_text, &so, on_pcm, &pc);
-        if (rc == 0 && !t->cancel && cb->event) emit_bookmarks(t, t->base, o->end); /* bookmarks after the last word */
+        if (rc == 0 && !sam_cancelled(&t->cancel) && cb->event) emit_bookmarks(t, t->base, o->end); /* bookmarks after the last word */
     }
     if (t->fx) { /* let the echoes die away, exactly as sam_say does */
         int k;
@@ -661,7 +669,7 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
         sam4fx_free(t->fx);
         t->fx = NULL;
     }
-    if (rc >= 0 && (t->cancel || t->stopped)) rc = 1;
+    if (rc >= 0 && (sam_cancelled(&t->cancel) || t->stopped)) rc = 1;
     if (rc == 0) {
         if (cb->event) emit_bookmarks(t, t->base, -1);
         if (cb->event) {

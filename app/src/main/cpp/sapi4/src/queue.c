@@ -96,6 +96,22 @@ int queue_pop(Queue *q, QItem *out) {
     return 1;
 }
 
+int queue_take_all(Queue *q, QItem *out, uint32_t capacity, uint32_t *count) {
+    if (!q || !count) return 0;
+    vc_EnterCriticalSection(q->cs);
+    if (q->count > capacity || (q->count && (!out || !q->items))) {
+        vc_LeaveCriticalSection(q->cs);
+        return 0;
+    }
+    uint32_t n = q->count;
+    if (n) memcpy(out, GP(QItem, q->items), (size_t)n * sizeof(QItem));
+    q->count = 0;
+    queue_update_events(q);
+    vc_LeaveCriticalSection(q->cs);
+    *count = n;
+    return 1;
+}
+
 static uint32_t locked_get(void *obj, uint32_t cs_off) {
     uint8_t *o = obj;
     vc_EnterCriticalSection(o + cs_off);

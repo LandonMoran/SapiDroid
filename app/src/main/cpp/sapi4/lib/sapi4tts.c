@@ -165,13 +165,46 @@ static void queue_drop(Queue *q) {
         if (it.data) vc_free(GP(void, it.data));
 }
 
+static int queue_take_items(Queue *q, QItem **items, uint32_t *count) {
+    uint32_t capacity = queue_count(q);
+    size_t bytes = (size_t)capacity * sizeof(QItem);
+    if (capacity && bytes / sizeof(QItem) != capacity) return 0;
+    QItem *out = malloc(bytes ? bytes : sizeof(QItem));
+    if (!out) return 0;
+    if (!queue_take_all(q, out, capacity, count)) {
+        free(out);
+        return 0;
+    }
+    *items = out;
+    return 1;
+}
+
 // the PCM the synthesizer handed to the audio side, in order; 1 if the callback asked to stop
 static int deliver(s4_engine *e, s4_pcm_fn fn, void *user) {
-    QItem it;
     int stop = 0;
-    while (queue_pop(e->q_audio, &it)) {
-        if (it.code == 6 && it.data && !stop && fn && fn(GP(const int16_t, it.data), it.bytes / 2, user)) stop = 1;
-        if (it.data) vc_free(GP(void, it.data));
+    if (queue_count(e->q_audio) <= 1) {
+        QItem it;
+        while (queue_pop(e->q_audio, &it)) {
+            if (it.code == 6 && it.data && !stop && fn && fn(GP(const int16_t, it.data), it.bytes / 2, user)) stop = 1;
+            if (it.data) vc_free(GP(void, it.data));
+        }
+        return stop;
+    }
+    QItem *items = NULL;
+    uint32_t count = 0;
+    if (queue_take_items(e->q_audio, &items, &count)) {
+        for (uint32_t i = 0; i < count; i++) {
+            QItem *it = &items[i];
+            if (it->code == 6 && it->data && !stop && fn && fn(GP(const int16_t, it->data), it->bytes / 2, user)) stop = 1;
+            if (it->data) vc_free(GP(void, it->data));
+        }
+        free(items);
+    } else {
+        QItem it;
+        while (queue_pop(e->q_audio, &it)) {
+            if (it.code == 6 && it.data && !stop && fn && fn(GP(const int16_t, it.data), it.bytes / 2, user)) stop = 1;
+            if (it.data) vc_free(GP(void, it.data));
+        }
     }
     return stop;
 }
@@ -196,11 +229,16 @@ static int run_text(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn
     vc_rand_use(NULL);
     // hold the front end's items back and pass them on one by one (the threads of the original would
     // take them as they come; the results are the same)
-    uint32_t count = e->q_phones->count, k = 0;
-    QItem *items = malloc((count ? count : 1) * sizeof(QItem));
-    while (k < count && queue_pop(e->q_phones, &items[k])) k++;
-    count = k;
+    uint32_t count = 0, k = 0;
+    QItem *items = NULL;
+    if (!queue_take_items(e->q_phones, &items, &count)) {
+        queue_drop(e->q_phones);
+        queue_drop(e->q_units);
+        queue_drop(e->q_audio);
+        return -1;
+    }
     int stopped = 0;
+    int failed = 0;
     for (k = 0; k < count; k++) {
         if (atomic_load(&e->stop)) {
             stopped = 1;
@@ -209,10 +247,13 @@ static int run_text(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn
         queue_push(e->q_phones, &items[k]);
         run_stage(unit_loop, e->u, &e->rand_unit);
         // and the unit stage's items one at a time through the synthesizer, the audio out after each
-        uint32_t nu = e->q_units->count, j = 0;
-        QItem *units = malloc((nu ? nu : 1) * sizeof(QItem));
-        while (j < nu && queue_pop(e->q_units, &units[j])) j++;
-        nu = j;
+        uint32_t nu = 0, j = 0;
+        QItem *units = NULL;
+        if (!queue_take_items(e->q_units, &units, &nu)) {
+            failed = 1;
+            k++;
+            break;
+        }
         for (j = 0; j < nu; j++) {
             if (atomic_load(&e->stop)) {
                 stopped = 1;
@@ -237,12 +278,12 @@ static int run_text(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn
     for (; k < count; k++)
         if (items[k].data) vc_free(GP(void, items[k].data));
     free(items);
-    if (stopped) {
+    if (stopped || failed) {
         queue_drop(e->q_phones);
         queue_drop(e->q_units);
         queue_drop(e->q_audio);
     }
-    return stopped;
+    return failed ? -1 : stopped;
 }
 
 // ---------------------------------------------------------------- engines
@@ -412,22 +453,28 @@ int s4_set_speed(s4_engine *e, unsigned wpm) {
 int s4_speak(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn, void *user) {
     if (!e || !text) return -1;
     pthread_mutex_lock(&g_lock);
+    vc_ResetEvent(e->fe->abort_event);
     atomic_store(&e->stop, 0);
     atomic_store(&e->speaking, 1);
     int r = run_text(e, text, flags, fn, user);
     atomic_store(&e->speaking, 0);
     atomic_store(&e->stop, 0);
+    vc_ResetEvent(e->fe->abort_event);
     pthread_mutex_unlock(&g_lock);
     return r;
 }
 
 void s4_stop(s4_engine *e) {
-    if (e && atomic_load(&e->speaking)) atomic_store(&e->stop, 1);
+    if (e && atomic_load(&e->speaking)) {
+        atomic_store(&e->stop, 1);
+        vc_SetEvent(e->fe->abort_event);
+    }
 }
 
 int s4_reset(s4_engine *e) {
     if (!e) return -1;
     pthread_mutex_lock(&g_lock);
+    vc_ResetEvent(e->fe->abort_event);
     queue_drop(e->q_text);
     queue_drop(e->q_phones);
     queue_drop(e->q_units);

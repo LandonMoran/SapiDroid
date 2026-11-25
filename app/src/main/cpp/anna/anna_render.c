@@ -379,7 +379,7 @@ int anna_render_sentence_ex(anna_voice *v, const anna_unitspec *specs0, int n, c
     for (i = 0; i < n && rc == 0; i++) {
         const anna_unitspec *sp = &specs[i], *nx = i + 1 < n ? &specs[i + 1] : NULL;
         int cut, a, flag, r, j, first, pmode;
-        if (opt->cancel && *opt->cancel) {
+        if (anna_cancel_requested(opt->cancel)) {
             rc = 1;
             break;
         }

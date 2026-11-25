@@ -65,9 +65,16 @@ anna_udt *anna_udt_load(const char *path, char *err, size_t errlen)
     blob = d + 16 + n * 24;
     if ((long)(16 + n * 24) + (long)bsz > sz) { free(d); snprintf(err, errlen, "bad UDT blob"); return NULL; }
     u = calloc(1, sizeof *u);
+    if (!u) { free(d); snprintf(err, errlen, "out of memory"); return NULL; }
     u->n = n;
     u->u = calloc((size_t)n + 1, sizeof *u->u);
     for (k = 0; k < 3; k++) u->list[k] = calloc((size_t)n + 1, sizeof(int));
+    if (!u->u || !u->list[0] || !u->list[1] || !u->list[2]) {
+        snprintf(err, errlen, "out of memory");
+        anna_udt_free(u);
+        free(d);
+        return NULL;
+    }
     for (i = 0; i < n; i++) {
         const unsigned char *r = d + 12 + 24 * i;
         udt_unit *x = &u->u[i];

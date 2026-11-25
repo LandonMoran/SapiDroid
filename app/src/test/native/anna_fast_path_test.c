@@ -1,7 +1,10 @@
 #include "../../main/cpp/anna/anna_tts.c"
 #include <assert.h>
+#include <pthread.h>
 
 static int sentences, expected_events, events, audio_count, stop_audio;
+static volatile int block_render, render_entered, release_render;
+static anna_tts *cancel_target;
 static int16_t output[4];
 static anna_token token;
 
@@ -33,6 +36,11 @@ int anna_render_sentence_ex(anna_voice *voice, const anna_unitspec *specs, int n
                             const anna_render_opts *opt, anna_pcm_cb cb, void *user) {
     (void)voice; (void)specs; (void)n;
     assert((opt->item_cb != NULL) == expected_events);
+    if (__atomic_load_n(&block_render, __ATOMIC_RELAXED)) {
+        __atomic_store_n(&render_entered, 1, __ATOMIC_RELAXED);
+        while (!__atomic_load_n(&release_render, __ATOMIC_RELAXED)) {}
+        return anna_cancel_requested(opt->cancel) ? 1 : 0;
+    }
     if (opt->item_cb) opt->item_cb(opt->user, 1, 0);
     const int16_t pcm[] = { -100, -1, 0, 100 };
     cb(pcm, 4, user);
@@ -53,10 +61,19 @@ static void event(const anna_event *ev, void *user) {
     }
 }
 
+static void *cancel_while_rendering(void *unused) {
+    (void)unused;
+    while (!__atomic_load_n(&render_entered, __ATOMIC_RELAXED)) {}
+    anna_tts_cancel(cancel_target);
+    __atomic_store_n(&release_render, 1, __ATOMIC_RELAXED);
+    return NULL;
+}
+
 int main(void) {
     anna_unitinfo info[2] = {{0}};
     anna_tts t = {0};
     anna_callbacks cb = { audio, NULL, NULL };
+    pthread_t canceller;
     const int16_t pcm[] = { -100, -1, 0, 100 };
     t.info = info;
     assert(anna_tts_speak(&t, "abc", 0, &cb) == 0);
@@ -69,5 +86,11 @@ int main(void) {
     cb.event = NULL;
     stop_audio = 1;
     assert(anna_tts_speak(&t, "abc", 0, &cb) == 1);
+    stop_audio = 0;
+    block_render = 1;
+    cancel_target = &t;
+    assert(pthread_create(&canceller, NULL, cancel_while_rendering, NULL) == 0);
+    assert(anna_tts_speak(&t, "abc", 0, &cb) == 1);
+    assert(pthread_join(canceller, NULL) == 0);
     return 0;
 }

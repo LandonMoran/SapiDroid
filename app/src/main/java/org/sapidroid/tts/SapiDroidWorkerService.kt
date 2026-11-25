@@ -401,49 +401,42 @@ class SapiDroidWorkerService : Service() {
         pitchPercent: Int,
         text: String
     ) {
-        val info = VoiceCatalog.infoFor(voice)
-        if (BuildConfig.DEBUG && text.contains(HANG_PREFIX)) {
-            Log.w(TAG, "debug hang for request $id")
-            try {
-                Thread.sleep(120_000)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
+        try {
+            val info = VoiceCatalog.infoFor(voice)
+            if (BuildConfig.DEBUG && text.contains(HANG_PREFIX)) {
+                Log.w(TAG, "debug hang for request $id")
+                try {
+                    Thread.sleep(120_000)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                return
             }
+            if (info == null) {
+                synchronized(state) { failed = true }
+                return
+            }
+            val sink = PcmSink { bytes -> enqueueAudio(id, bytes) }
+            for (piece in StreamingText.split(text)) {
+                if (isCancelled(id)) break
+                val result = synthChunk(id, info, ratePercent, pitchPercent, piece, sink)
+                if (result != 0) {
+                    synchronized(state) { if (!cancelled) failed = true }
+                    if (!isCancelled(id)) Log.e(TAG, "synthesis failed for $voice (status $result)")
+                    break
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "synthesis failed", t)
+            synchronized(state) {
+                if (id == currentId && !cancelled) failed = true
+            }
+        } finally {
             synchronized(state) {
                 busy = false
                 finished = true
                 (state as java.lang.Object).notifyAll()
             }
-            return
-        }
-        if (info == null) {
-            synchronized(state) {
-                failed = true
-                busy = false
-                finished = true
-                (state as java.lang.Object).notifyAll()
-            }
-            return
-        }
-        val sink = PcmSink { bytes -> enqueueAudio(id, bytes) }
-        for (piece in StreamingText.split(text)) {
-            if (isCancelled(id)) break
-            val result = try {
-                synthChunk(id, info, ratePercent, pitchPercent, piece, sink)
-            } catch (t: Throwable) {
-                Log.e(TAG, "synthesis failed", t)
-                -1
-            }
-            if (result != 0) {
-                synchronized(state) { if (!cancelled) failed = true }
-                if (!isCancelled(id)) Log.e(TAG, "synthesis failed for $voice (status $result)")
-                break
-            }
-        }
-        synchronized(state) {
-            busy = false
-            finished = true
-            (state as java.lang.Object).notifyAll()
         }
     }
 

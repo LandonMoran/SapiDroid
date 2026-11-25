@@ -5,6 +5,7 @@
 #include <string.h>
 #include "zira_tts.h"
 #include "pcm_stream.h"
+#include "jni_text.h"
 
 JNIEXPORT jlong JNICALL
 Java_org_sapidroid_tts_NativeZira_open(JNIEnv *env, jclass clazz,
@@ -12,7 +13,12 @@ Java_org_sapidroid_tts_NativeZira_open(JNIEnv *env, jclass clazz,
     (void)clazz;
     if (!dir || !voice) return 0;
     const char *c_dir = (*env)->GetStringUTFChars(env, dir, NULL);
+    if (!c_dir) return 0;
     const char *c_voice = (*env)->GetStringUTFChars(env, voice, NULL);
+    if (!c_voice) {
+        (*env)->ReleaseStringUTFChars(env, dir, c_dir);
+        return 0;
+    }
     char err[256];
     err[0] = 0;
     zira_tts *t = zira_tts_open(c_dir, c_voice, err, sizeof err);
@@ -54,7 +60,7 @@ Java_org_sapidroid_tts_NativeZira_speak(JNIEnv *env, jclass clazz, jlong h, jstr
     if (!h || !text) return -1;
     pcm_stream stream;
     if (pcm_stream_init(&stream, env, sink)) return -1;
-    const char *c_text = (*env)->GetStringUTFChars(env, text, NULL);
+    char *c_text = jni_text_utf8(env, text);
     if (!c_text) return -1;
 
     zira_callbacks cb;
@@ -63,7 +69,7 @@ Java_org_sapidroid_tts_NativeZira_speak(JNIEnv *env, jclass clazz, jlong h, jstr
     cb.user = &stream;
 
     int rc = zira_tts_speak((zira_tts *)(intptr_t)h, c_text, 0, &cb);
-    (*env)->ReleaseStringUTFChars(env, text, c_text);
+    free(c_text);
 
     if (rc < 0) {
         __android_log_print(4, "SapiDroidNative", "speak failed rc=%d", rc);

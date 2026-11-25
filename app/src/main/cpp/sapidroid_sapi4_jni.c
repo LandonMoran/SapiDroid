@@ -12,6 +12,7 @@ Java_org_sapidroid_tts_NativeSapi4_init(JNIEnv *env, jclass clazz, jstring dllPa
     (void)clazz;
     if (!dllPath) return -1;
     const char *p = (*env)->GetStringUTFChars(env, dllPath, NULL);
+    if (!p) return -1;
     int rc = s4_init(p);
     (*env)->ReleaseStringUTFChars(env, dllPath, p);
     __android_log_print(4, "SapiDroidSapi4", "s4_init rc=%d", rc);
@@ -21,18 +22,42 @@ Java_org_sapidroid_tts_NativeSapi4_init(JNIEnv *env, jclass clazz, jstring dllPa
 JNIEXPORT jobjectArray JNICALL
 Java_org_sapidroid_tts_NativeSapi4_listModes(JNIEnv *env, jclass clazz, jstring voiceDir) {
     (void)clazz;
-    s4_mode modes[64];
+    s4_mode first[64], *modes = first;
+    if (!voiceDir) return NULL;
     const char *d = (*env)->GetStringUTFChars(env, voiceDir, NULL);
-    int n = s4_list_modes(d, modes, 64);
+    if (!d) return NULL;
+    int n = s4_list_modes(d, first, 64);
+    if (n > 64) {
+        modes = (size_t)n > SIZE_MAX / sizeof(*modes) ? NULL :
+            malloc((size_t)n * sizeof(*modes));
+        if (!modes) {
+            (*env)->ReleaseStringUTFChars(env, voiceDir, d);
+            jclass oom = (*env)->FindClass(env, "java/lang/OutOfMemoryError");
+            if (oom) (*env)->ThrowNew(env, oom, "cannot list SAPI 4 voices");
+            return NULL;
+        }
+        int found = s4_list_modes(d, modes, n);
+        if (found > n) {
+            __android_log_print(5, "SapiDroidSapi4", "voice list grew while being read");
+        } else {
+            n = found;
+        }
+    }
     (*env)->ReleaseStringUTFChars(env, voiceDir, d);
-    if (n <= 0) return NULL;
+    if (n <= 0) {
+        if (modes != first) free(modes);
+        return NULL;
+    }
     jclass strClass = (*env)->FindClass(env, "java/lang/String");
-    jobjectArray out = (*env)->NewObjectArray(env, n, strClass, NULL);
-    for (int i = 0; i < n; i++) {
+    jobjectArray out = strClass ? (*env)->NewObjectArray(env, n, strClass, NULL) : NULL;
+    for (int i = 0; out && i < n; i++) {
         jstring s = (*env)->NewStringUTF(env, modes[i].name);
+        if (!s) break;
         (*env)->SetObjectArrayElement(env, out, i, s);
         (*env)->DeleteLocalRef(env, s);
+        if ((*env)->ExceptionCheck(env)) break;
     }
+    if (modes != first) free(modes);
     return out;
 }
 
@@ -42,7 +67,12 @@ Java_org_sapidroid_tts_NativeSapi4_open(JNIEnv *env, jclass clazz,
     (void)clazz;
     if (!voiceDir || !mode) return 0;
     const char *d = (*env)->GetStringUTFChars(env, voiceDir, NULL);
+    if (!d) return 0;
     const char *m = (*env)->GetStringUTFChars(env, mode, NULL);
+    if (!m) {
+        (*env)->ReleaseStringUTFChars(env, voiceDir, d);
+        return 0;
+    }
     char err[256];
     err[0] = 0;
     s4_engine *e = s4_open(d, m, err, sizeof err);
