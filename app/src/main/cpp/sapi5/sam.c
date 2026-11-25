@@ -298,17 +298,20 @@ static void ifft_split_radix(float *x, int n, int m, const float *sine)
         id = n2 * 2;
         do {
             for (i = is; i < n; i += id) {
-                double f1 = x[i], f2 = x[i + 2 * n4], t = f1 - f2;
+                /* The values the butterflies need are read once into registers; each result is still
+                 * rounded to float exactly where the engine stored it, so the transform is unchanged. */
+                double f1 = x[i], f2 = x[i + 2 * n4], f3 = x[i + n4], f4 = x[i + 3 * n4], t = f1 - f2;
                 x[i] = (float)(f1 + f2);
-                x[i + n4] = (float)((double)x[i + n4] * 2.0);
-                x[i + 2 * n4] = (float)(t - (double)x[i + 3 * n4] * 2.0);
-                x[i + 3 * n4] = (float)((double)x[i + 3 * n4] * 2.0 + t);
+                x[i + n4] = (float)(f3 * 2.0);
+                x[i + 2 * n4] = (float)(t - f4 * 2.0);
+                x[i + 3 * n4] = (float)(f4 * 2.0 + t);
                 if (n4 > 1) {
                     int b0 = i + n8;
-                    double a = ((double)x[b0 + n4] - x[b0]) * r2;
-                    double b = ((double)x[b0 + 2 * n4] + x[b0 + 3 * n4]) * r2;
-                    x[b0] = (float)((double)x[b0] + x[b0 + n4]);
-                    x[b0 + n4] = (float)((double)x[b0 + 3 * n4] - x[b0 + 2 * n4]);
+                    double g0 = x[b0], g1 = x[b0 + n4], g2 = x[b0 + 2 * n4], g3 = x[b0 + 3 * n4];
+                    double a = (g1 - g0) * r2;
+                    double b = (g2 + g3) * r2;
+                    x[b0] = (float)(g0 + g1);
+                    x[b0 + n4] = (float)(g3 - g2);
                     x[b0 + 2 * n4] = (float)((b + a) * -2.0);
                     x[b0 + 3 * n4] = (float)((a - b) * 2.0);
                 }
@@ -328,15 +331,21 @@ static void ifft_split_radix(float *x, int n, int m, const float *sine)
                     int i5 = i + n4 - j, i6 = i5 + n4, i7 = i6 + n4, i8 = i7 + n4;
                     double x1 = x[i1], x2 = x[i2], x3 = x[i3], x4 = x[i4];
                     double x5 = x[i5], x6 = x[i6], x7 = x[i7], x8 = x[i8];
-                    double u1, u2, u3, u4;
+                    double u1, u2, u3, u4, d16, s74, d52, s83;
                     x[i1] = (float)(x1 + x6);
                     x[i5] = (float)(x5 + x2);
                     x[i6] = (float)(x8 - x3);
                     x[i2] = (float)(x4 - x7);
-                    u1 = (x1 - x6) - (x7 + x4);
-                    u2 = x7 + x4 + (x1 - x6);
-                    u3 = (x5 - x2) - (x8 + x3);
-                    u4 = x8 + x3 + (x5 - x2);
+                    /* (x1-x6), (x7+x4), (x5-x2) and (x8+x3) each appear in two of u1..u4; the
+                     * doubles are computed once and both sums keep the engine's order. */
+                    d16 = x1 - x6;
+                    s74 = x7 + x4;
+                    d52 = x5 - x2;
+                    s83 = x8 + x3;
+                    u1 = d16 - s74;
+                    u2 = s74 + d16;
+                    u3 = d52 - s83;
+                    u4 = s83 + d52;
                     x[i3] = (float)(u1 * cc1 + u3 * ss1);
                     x[i7] = (float)(u1 * ss1 - u3 * cc1);
                     x[i4] = (float)(cc3 * u2 - ss3 * u4);
