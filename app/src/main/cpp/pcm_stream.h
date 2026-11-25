@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "prof.h"
+
 typedef struct {
     JNIEnv *env;
     jobject sink;
@@ -61,16 +63,31 @@ static int pcm_stream_audio(const int16_t *pcm, size_t count, void *user) {
         }
         const jbyte *data = bytes;
 #endif
+        /* profiled rows: jni:pcm_copy is the array allocation and copy into the JVM, and
+         * audio:queue_push is the sink call itself, which blocks when the Kotlin audio queue is
+         * full, so it is where producer-side back-pressure shows up. */
+#if PROF_ON
+        long long prof_copy_start = prof_now_ns();
+#endif
         jbyteArray block = (*env)->NewByteArray(env, (jsize)(n * 2));
         if (!block) {
             stream->failed = 1;
             return 1;
         }
         (*env)->SetByteArrayRegion(env, block, 0, (jsize)(n * 2), data);
+#if PROF_ON
+        prof_first_block();
+        prof_add_ns("jni:pcm_copy", prof_now_ns() - prof_copy_start);
+        prof_count_bytes("jni:pcm_copy", (long long)n * 2);
+        long long prof_sink_start = prof_now_ns();
+#endif
         jboolean accepted = JNI_FALSE;
         if (!(*env)->ExceptionCheck(env))
             accepted = (*env)->CallBooleanMethod(env, stream->sink, stream->on_pcm, block);
         (*env)->DeleteLocalRef(env, block);
+#if PROF_ON
+        prof_add_ns("audio:queue_push", prof_now_ns() - prof_sink_start);
+#endif
         if ((*env)->ExceptionCheck(env)) {
             stream->failed = 1;
             return 1;

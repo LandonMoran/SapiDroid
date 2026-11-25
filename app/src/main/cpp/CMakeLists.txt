@@ -80,7 +80,16 @@ set(SAPI5_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/sapidroid_sapi5_jni.c
 )
 
-add_library(sapidroid SHARED sapidroid_jni.c ${ENGINE_SOURCES} ${ANNA_SOURCES} ${SAPI4_SOURCES} ${SAPI5_SOURCES})
+# Opt-in profiler (gradle -Pprofile): times voice load, speak, the JNI PCM handoff and the audio
+# queue, and prints a ranked table per utterance. Off by default, and every instrumentation site
+# compiles to nothing without it, so release builds are unchanged.
+option(SAPIDROID_PROFILE "Instrument voice load, speak, PCM handoff and audio queue" OFF)
+
+add_library(sapidroid SHARED sapidroid_jni.c prof.c ${ENGINE_SOURCES} ${ANNA_SOURCES} ${SAPI4_SOURCES} ${SAPI5_SOURCES})
+
+if(SAPIDROID_PROFILE)
+    target_compile_definitions(sapidroid PRIVATE SAPIDROID_PROFILE=1)
+endif()
 
 target_include_directories(sapidroid PRIVATE ${ENGINE_DIR} ${ANNA_DIR} ${SAPI4_DIR}/lib ${SAPI4_DIR}/src ${SAPI4_DIR}/port ${SAPI5_DIR})
 

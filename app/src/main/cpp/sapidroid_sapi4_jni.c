@@ -6,6 +6,7 @@
 #include <string.h>
 #include "sapi4tts.h"
 #include "pcm_stream.h"
+#include "prof.h"
 
 JNIEXPORT jint JNICALL
 Java_org_sapidroid_tts_NativeSapi4_init(JNIEnv *env, jclass clazz, jstring dllPath) {
@@ -75,7 +76,9 @@ Java_org_sapidroid_tts_NativeSapi4_open(JNIEnv *env, jclass clazz,
     }
     char err[256];
     err[0] = 0;
+    PROF_SCOPE("load:voice");
     s4_engine *e = s4_open(d, m, err, sizeof err);
+    PROF_END();
     if (!e) {
         __android_log_print(4, "SapiDroidSapi4", "s4_open(%s) failed: %s", m, err);
     }
@@ -130,19 +133,34 @@ Java_org_sapidroid_tts_NativeSapi4_speak(JNIEnv *env, jclass clazz, jlong h, jby
     jsize len = (*env)->GetArrayLength(env, text);
     char *c_text = (char *)malloc((size_t)len + 1);
     if (!c_text) return -1;
-    (*env)->GetByteArrayRegion(env, text, 0, len, (jbyte *)c_text);
+    {
+        PROF_SCOPE("speak:text");
+        (*env)->GetByteArrayRegion(env, text, 0, len, (jbyte *)c_text);
+        PROF_END();
+    }
     if ((*env)->ExceptionCheck(env)) {
         free(c_text);
         return -1;
     }
     c_text[len] = 0;
 
-    int rc = s4_speak_checked((s4_engine *)(intptr_t)h, c_text, 0, pcm_stream_audio, &stream,
+#if PROF_ON
+    prof_mark_speak_start();
+#endif
+    int rc;
+    {
+        PROF_SCOPE("speak:call");
+        rc = s4_speak_checked((s4_engine *)(intptr_t)h, c_text, 0, pcm_stream_audio, &stream,
                               pcm_stream_cancelled, &stream);
+        PROF_END();
+    }
     free(c_text);
     if (rc < 0) {
         __android_log_print(4, "SapiDroidSapi4", "s4_speak failed rc=%d", rc);
     }
+#if PROF_ON
+    prof_dump("utterance");
+#endif
     return stream.failed ? -1 : rc;
 }
 

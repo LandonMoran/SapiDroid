@@ -207,6 +207,9 @@ class SapiDroidService : TextToSpeechService() {
             } catch (t2: Throwable) {
                 Log.e(TAG, "callback.error failed", t2)
             }
+        } finally {
+            // Profiling builds print one ranked table per request (no-op otherwise).
+            Prof.dump("request")
         }
     }
 
@@ -375,14 +378,17 @@ class SapiDroidService : TextToSpeechService() {
                     return false
                 }
                 val block = try {
-                    worker.pull(requestId, PULL_BYTES, PULL_WAIT_MS)
+                    Prof.timed("audio:pull") { worker.pull(requestId, PULL_BYTES, PULL_WAIT_MS) }
                 } catch (t: Throwable) {
                     SapiDroidWorkers.retire(worker)
                     throw WorkerGone("pull failed", t)
                 }
                 if (block != null && block.isNotEmpty()) {
                     if (!started) {
-                        if (callback.start(rateHz, android.media.AudioFormat.ENCODING_PCM_16BIT, 1) != TextToSpeech.SUCCESS) {
+                        val startRc = Prof.timed("tts:start") {
+                            callback.start(rateHz, android.media.AudioFormat.ENCODING_PCM_16BIT, 1)
+                        }
+                        if (startRc != TextToSpeech.SUCCESS) {
                             worker.cancel(requestId)
                             return false
                         }
@@ -400,7 +406,8 @@ class SapiDroidService : TextToSpeechService() {
                             return false
                         }
                         val n = minOf(maxBuf, block.size - off)
-                        if (callback.audioAvailable(block, off, n) != TextToSpeech.SUCCESS) {
+                        val deliverRc = Prof.timed("audio:deliver") { callback.audioAvailable(block, off, n) }
+                        if (deliverRc != TextToSpeech.SUCCESS) {
                             worker.cancel(requestId)
                             return false
                         }

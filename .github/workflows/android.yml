@@ -22,6 +22,14 @@ jobs:
           java -cp "$RUNNER_TEMP/pcm-test" PcmStreamTest "$RUNNER_TEMP/pcm-test/libpcm-test.so"
           cc -shared -fPIC -std=c99 -Wall -Wextra -Werror -U__BYTE_ORDER__ -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" app/src/test/native/pcm_stream_test.c -o "$RUNNER_TEMP/pcm-test/libpcm-test-portable.so"
           java -cp "$RUNNER_TEMP/pcm-test" PcmStreamTest "$RUNNER_TEMP/pcm-test/libpcm-test-portable.so"
+          # The profiler (-Pprofile) is opt-in, so nothing else in CI compiles it: build it both ways
+          # and run the PCM test against the instrumented path so it cannot rot between device runs.
+          cc -std=c99 -Wall -Wextra -Werror -c app/src/main/cpp/prof.c -o "$RUNNER_TEMP/pcm-test/prof-off.o"
+          cc -std=c99 -Wall -Wextra -Werror -DSAPIDROID_PROFILE -c app/src/main/cpp/prof.c -o "$RUNNER_TEMP/pcm-test/prof-on.o"
+          cc -shared -fPIC -std=c99 -Wall -Wextra -Werror -DSAPIDROID_PROFILE \
+            -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" -Iapp/src/main/cpp \
+            app/src/test/native/pcm_stream_test.c app/src/main/cpp/prof.c -o "$RUNNER_TEMP/pcm-test/libpcm-test-profile.so"
+          java -cp "$RUNNER_TEMP/pcm-test" PcmStreamTest "$RUNNER_TEMP/pcm-test/libpcm-test-profile.so"
           cc -std=c99 -D_DEFAULT_SOURCE -fPIC -shared -Wall -Wextra -Werror -Wno-unused-parameter \
             -Wl,--wrap=malloc -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
             -Iapp/src/test/native -Iapp/src/main/cpp/sapi4/lib -Iapp/src/main/cpp \

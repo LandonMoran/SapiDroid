@@ -226,6 +226,55 @@ prints ns per phone. Its output is *not* compared with the original: this fork d
 `Phone.Syllable.Word.FwPosInIP`/`BwPosInSentence` against word indices (the decomp read a phrase
 index as a word index) and maps phone ids for the en-GB/en-AU sets, so the columns differ by design.
 
+## Profiling on a device
+
+Kernel timings come from `bench/run.sh`; the user-visible milliseconds come from a profile build:
+
+```
+./gradlew assembleDebug -Pprofile
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb logcat -s SapiDroidProf
+```
+
+`-Pprofile` defines `SAPIDROID_PROFILE` for the native build (see `app/src/main/cpp/CMakeLists.txt`)
+and sets `BuildConfig.PROFILE` for Kotlin. Without it every instrumentation site compiles to
+nothing, so release builds are untouched. Each speak call or request then logs one table, ranked by
+accumulated time, e.g.
+
+```
+=== profile request #4 (9 points, ms of accumulated time)
+point                    count   total ms     avg us     max us   Mbytes
+speak:call                   3      182.400    60800.0    102400.0        -
+speak:first_pcm              3       41.900    13966.7     20100.0        -
+audio:deliver              214       38.700      180.8      10400.0        -
+jni:pcm_copy               214        4.100       19.2        120.0     0.44
+audio:queue_push           214        1.900        8.9        260.0        -
+audio:pull                 215       12.400       57.7        900.0        -
+load:voice                   1        9.800     9800.0       9800.0        -
+speak:text                   3        0.300      100.0        200.0        -
+tts:start                    1        6.100     6100.0       6100.0        -
+```
+
+What each row is:
+
+- `load:voice` — opening the voice (parsing the pack). Once per voice per process.
+- `speak:first_pcm` — engine call start to the first PCM block reaching Kotlin: frontend plus
+  warm-up, the closest thing to "time before sound".
+- `speak:call` — the engine call itself, wall clock, including the time it spends blocked on the
+  audio queue (compare with `audio:queue_push` to see the split).
+- `speak:text` — decoding the text argument into UTF-8/CP1252.
+- `jni:pcm_copy` — `NewByteArray` plus the sample copy into the JVM (Mbytes shows throughput).
+- `audio:queue_push` — the sink call, i.e. the producer side of the Kotlin queue; it blocks when
+  the queue is full.
+- `audio:pull` — the consumer side: binder round trip plus the copy out of that queue, including
+  the wait for the first audio.
+- `audio:deliver` — `callback.audioAvailable`, i.e. the platform's audio buffer; large values here
+  mean the synthesizer is running ahead of playback.
+- `tts:start` / `tts:request` — `callback.start` and the whole `onSynthesizeText`.
+
+Profiling builds are slower than release ones and log per utterance, so use them for attribution,
+not for measuring absolute throughput.
+
 ## Gotchas
 
 - **Voice data is not source.** Never commit `.vce`, `.spd`, `M1033*` files or

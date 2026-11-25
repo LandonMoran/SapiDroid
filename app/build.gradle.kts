@@ -18,6 +18,11 @@ val releaseSigningReady = !releaseKeystore.isNullOrBlank() && !releaseStorePassw
 val versionCodeOverride = (project.findProperty("versionCode") as String?)?.toIntOrNull()
 val versionNameOverride = project.findProperty("versionName") as String?
 
+// ./gradlew assembleDebug -Pprofile builds the profiling variant: the native side defines
+// SAPIDROID_PROFILE (see CMakeLists.txt) and the Kotlin side reports its audio timings into the
+// same table. Release builds leave it off, so none of the instrumentation is compiled in.
+val profileBuild = project.hasProperty("profile")
+
 android {
     namespace = "org.sapidroid.tts"
     compileSdk = 34
@@ -34,9 +39,11 @@ android {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
             if (project.hasProperty("emulatorTests")) abiFilters += "x86_64"
         }
+        buildConfigField("boolean", "PROFILE", profileBuild.toString())
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_static")
+                if (profileBuild) arguments += "-DSAPIDROID_PROFILE=ON"
             }
         }
     }
