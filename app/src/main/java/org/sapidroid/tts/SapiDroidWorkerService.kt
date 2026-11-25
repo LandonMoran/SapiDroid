@@ -214,7 +214,7 @@ class SapiDroidWorkerService : Service() {
         }
 
         override fun finished(requestId: Int): Boolean = synchronized(state) {
-            requestId != currentId || finished
+            requestId != currentId || (finished && pendingBytes == 0)
         }
 
         override fun failed(requestId: Int): Boolean = synchronized(state) {
