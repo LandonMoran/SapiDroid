@@ -20,6 +20,8 @@ jobs:
           cc -shared -fPIC -std=c99 -Wall -Wextra -Werror -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" app/src/test/native/pcm_stream_test.c -o "$RUNNER_TEMP/pcm-test/libpcm-test.so"
           javac -d "$RUNNER_TEMP/pcm-test" app/src/test/native/PcmStreamTest.java
           java -cp "$RUNNER_TEMP/pcm-test" PcmStreamTest "$RUNNER_TEMP/pcm-test/libpcm-test.so"
+          cc -shared -fPIC -std=c99 -Wall -Wextra -Werror -U__BYTE_ORDER__ -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" app/src/test/native/pcm_stream_test.c -o "$RUNNER_TEMP/pcm-test/libpcm-test-portable.so"
+          java -cp "$RUNNER_TEMP/pcm-test" PcmStreamTest "$RUNNER_TEMP/pcm-test/libpcm-test-portable.so"
           cc -std=c99 -D_DEFAULT_SOURCE -fPIC -shared -Wall -Wextra -Werror -Wno-unused-parameter \
             -Wl,--wrap=malloc -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
             -Iapp/src/test/native -Iapp/src/main/cpp/sapi4/lib -Iapp/src/main/cpp \
