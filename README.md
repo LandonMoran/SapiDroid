@@ -158,8 +158,8 @@ voice picker offers them once their data is complete.
   and a worker that will not answer is retired and replaced rather than
   interrupted inside native code.
 - Android's rate and pitch percentages are mapped onto each engine's own scale:
-  SAPI 5's -10..10 for SAPI 5 and OneCore, and the mode's pitch range and words
-  per minute for SAPI 4.
+  the extended fast rates for OneCore, Anna and SAPI 5, and the mode's pitch
+  range and words per minute for SAPI 4.
 
 ### Building the APK on Windows
 

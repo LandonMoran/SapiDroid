@@ -77,6 +77,7 @@ internal class FallbackSpeech(private val context: Context, private val stopped:
         val done = CountDownLatch(1)
         val failed = AtomicBoolean(false)
         val started = AtomicBoolean(false)
+        val delivered = AtomicBoolean(false)
         val active = AtomicBoolean(true)
         val id = "fallback-${System.nanoTime()}"
         val maxBuffer = callback.maxBufferSize
@@ -105,6 +106,7 @@ internal class FallbackSpeech(private val context: Context, private val stopped:
                             failed.set(true)
                             break
                         }
+                        delivered.set(true)
                         offset += size
                     }
                 }
@@ -134,7 +136,7 @@ internal class FallbackSpeech(private val context: Context, private val stopped:
                     return false
                 }
             }
-            if (stopped.get() || failed.get() || !started.get()) return false
+            if (stopped.get() || failed.get() || !started.get() || !delivered.get()) return false
             callback.done()
             return true
         } finally {

@@ -9,7 +9,6 @@ import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlin.math.abs
-import kotlin.math.ln
 import kotlin.math.log2
 import kotlin.math.roundToInt
 
@@ -321,7 +320,7 @@ class SapiDroidWorkerService : Service() {
             VoiceCatalog.Engine.ONECORE -> {
                 val h = openZira(info.name)
                 if (h == 0L) null else {
-                    NativeZira.setRate(h, sapi5Rate(ratePercent))
+                    NativeZira.setRate(h, sapiRate(ratePercent, 20))
                     NativeZira.setPitch(h, sapi5Pitch(pitchPercent))
                     NativeZira.speak(h, piece)
                 }
@@ -329,7 +328,7 @@ class SapiDroidWorkerService : Service() {
             VoiceCatalog.Engine.ANNA -> {
                 val h = openAnna(info.name)
                 if (h == 0L) null else {
-                    NativeAnna.setRate(h, sapi5Rate(ratePercent))
+                    NativeAnna.setRate(h, sapiRate(ratePercent, 18))
                     NativeAnna.setPitch(h, sapi5Pitch(pitchPercent))
                     NativeAnna.speak(h, piece)
                 }
@@ -337,7 +336,7 @@ class SapiDroidWorkerService : Service() {
             VoiceCatalog.Engine.SAPI5 -> {
                 val h = openSapi5(info.name)
                 if (h == 0L) null else {
-                    NativeSapi5.setRate(h, sapi5Rate(ratePercent))
+                    NativeSapi5.setRate(h, sapiRate(ratePercent, 18))
                     NativeSapi5.setPitch(h, sapi5Pitch(pitchPercent))
                     NativeSapi5.speak(h, piece)
                 }
@@ -440,12 +439,6 @@ class SapiDroidWorkerService : Service() {
         if (percent <= 0) return default
         val wanted = (default * (percent / 100.0)).roundToInt()
         return wanted.coerceIn(min, max)
-    }
-
-    /** Android percent -> SAPI 5 scale, -10..10, one step = 3^(1/10). */
-    private fun sapi5Rate(percent: Int): Int {
-        if (percent <= 0 || abs(percent - 100) <= 3) return 0
-        return (10.0 * ln(percent / 100.0) / ln(3.0)).roundToInt().coerceIn(-10, 10)
     }
 
     /** Android pitch ratio -> -10..10, one unit = half a semitone. */
