@@ -52,8 +52,9 @@ unsigned s4_get_pitch(const s4_engine *engine) { (void)engine; return 0; }
 unsigned s4_get_speed(const s4_engine *engine) { (void)engine; return 0; }
 int s4_set_pitch(s4_engine *engine, unsigned pitch) { (void)engine; (void)pitch; return 0; }
 int s4_set_speed(s4_engine *engine, unsigned speed) { (void)engine; (void)speed; return 0; }
-int s4_speak(s4_engine *engine, const char *text, unsigned flags, s4_pcm_fn fn, void *user) {
-    (void)engine; (void)text; (void)flags; (void)fn; (void)user;
+int s4_speak_checked(s4_engine *engine, const char *text, unsigned flags, s4_pcm_fn fn, void *user,
+                     int (*check_cancel)(void *), void *check_user) {
+    (void)engine; (void)text; (void)flags; (void)fn; (void)user; (void)check_cancel; (void)check_user;
     return 0;
 }
 void s4_stop(s4_engine *engine) { (void)engine; }

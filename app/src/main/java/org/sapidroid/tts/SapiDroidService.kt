@@ -234,8 +234,10 @@ class SapiDroidService : TextToSpeechService() {
         }
         val voice = info.label
 
-        Log.i(TAG, "synth start voice=$voice requested=${request.voiceName} " +
-            "engine=${info.engine} chars=${text.length} rate=$ratePercent pitch=$pitchPercent")
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(TAG, "synth start voice=$voice requested=${request.voiceName} " +
+                "engine=${info.engine} chars=${text.length} rate=$ratePercent pitch=$pitchPercent")
+        }
 
         var worker = currentWorker
         try {
@@ -356,6 +358,7 @@ class SapiDroidService : TextToSpeechService() {
         currentRequest = requestId
         var started = false
         var frames = 0L
+        val logSpeech = Log.isLoggable(TAG, Log.DEBUG)
         try {
             val maxBuf = callback.maxBufferSize
             if (maxBuf <= 0) {
@@ -403,7 +406,7 @@ class SapiDroidService : TextToSpeechService() {
                         }
                         off += n
                     }
-                    frames += block.size / 2L
+                    if (logSpeech) frames += block.size / 2L
                     continue
                 }
                 try {
@@ -422,7 +425,7 @@ class SapiDroidService : TextToSpeechService() {
         if (!started) return false
         try {
             callback.done()
-            Log.i(TAG, "request done voice=$voice frames=$frames sr=$rateHz")
+            if (logSpeech) Log.d(TAG, "request done voice=$voice frames=$frames sr=$rateHz")
         } catch (t: Throwable) {
             Log.e(TAG, "callback.done failed", t)
         }

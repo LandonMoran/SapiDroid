@@ -137,7 +137,8 @@ Java_org_sapidroid_tts_NativeSapi4_speak(JNIEnv *env, jclass clazz, jlong h, jby
     }
     c_text[len] = 0;
 
-    int rc = s4_speak((s4_engine *)(intptr_t)h, c_text, 0, pcm_stream_audio, &stream);
+    int rc = s4_speak_checked((s4_engine *)(intptr_t)h, c_text, 0, pcm_stream_audio, &stream,
+                              pcm_stream_cancelled, &stream);
     free(c_text);
     if (rc < 0) {
         __android_log_print(4, "SapiDroidSapi4", "s4_speak failed rc=%d", rc);

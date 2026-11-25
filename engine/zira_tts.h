@@ -94,6 +94,9 @@ ZIRA_API const char *zira_tts_emotion_name(const zira_tts *t, int i);
 
 /* Speak UTF-8 text; returns 0 when done, 1 when cancelled/stopped, -1 on error. */
 ZIRA_API int zira_tts_speak(zira_tts *t, const char *utf8, int flags, const zira_callbacks *cb);
+/* check_cancel runs after the native cancel flag is reset and before synthesis starts. */
+ZIRA_API int zira_tts_speak_checked(zira_tts *t, const char *utf8, int flags, const zira_callbacks *cb,
+                                    int (*check_cancel)(void *), void *check_user);
 
 /* Thread-safe: stop the current zira_tts_speak as soon as possible. During PCM delivery,
  * cancellation is checked between chunks; frontend and synthesis stages may take longer. */

@@ -246,8 +246,8 @@ typedef struct {
     int rate, volume, pitch;
 } xstate;
 
-/* Turns SAPI XML (or, with xml = 0, plain text) into a run list. Returns NULL on failure. */
-static xdoc *xml_prepare(const char *s, int xml, int rate, int volume, int pitch)
+/* Turns SAPI XML into a run list. Returns NULL on failure. */
+static xdoc *xml_prepare(const char *s, int rate, int volume, int pitch)
 {
     size_t len = strlen(s);
     xdoc *d = calloc(1, sizeof *d);
@@ -256,33 +256,14 @@ static xdoc *xml_prepare(const char *s, int xml, int rate, int volume, int pitch
     long i = 0, run_start = 0;
     if (!d) return NULL;
     d->text = malloc(len + 1);
-    d->bmap = xml ? malloc(sizeof(long) * (len + 2)) : NULL;
-    if (!d->text || (xml && !d->bmap)) {
+    d->bmap = malloc(sizeof(long) * (len + 2));
+    if (!d->text || !d->bmap) {
         xdoc_free(d);
         return NULL;
     }
     st.rate = rate;
     st.volume = volume;
     st.pitch = pitch;
-    if (!xml) {
-        memcpy(d->text, s, len);
-        d->n = (long)len;
-        d->text[len] = 0;
-        { /* one run, the whole text */
-            xop *o = xd_op(d);
-            if (!o) {
-                xdoc_free(d);
-                return NULL;
-            }
-            o->kind = 0;
-            o->start = 0;
-            o->end = d->n;
-            o->rate = rate;
-            o->volume = volume;
-            o->pitch = pitch;
-        }
-        return d;
-    }
     while (i < (long)len) {
         if (s[i] == '<') {
             long ts, te, ns, ne;
@@ -589,21 +570,42 @@ static void silence(sam_speech *t, size_t n, int volume)
 
 /* ------------------------------------------------------------------ speak */
 
-int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb)
+int sam_tts_speak_checked(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb,
+                          int (*check_cancel)(void *), void *check_user)
 {
     xdoc *d;
+    xdoc plain = {0};
+    xop plain_op = {0};
+    const char *doc_text;
     int i, rc = 0;
     char *run = NULL;
     long runcap = 0;
     if (!t || !utf8 || !cb) return -1;
     sam_cancel_set(&t->cancel, 0);
+    if (check_cancel && check_cancel(check_user)) {
+        sam_cancel_set(&t->cancel, 1);
+        return 1;
+    }
     t->stopped = 0;
     t->base = 0;
     t->cb = cb;
     t->orig = utf8;
     t->next_bm = 0;
-    d = xml_prepare(utf8, (flags & SAM_SPEAK_XML) != 0, t->rate, t->volume, t->pitch);
-    if (!d) return -1;
+    if (flags & SAM_SPEAK_XML) {
+        d = xml_prepare(utf8, t->rate, t->volume, t->pitch);
+        if (!d) return -1;
+        doc_text = d->text;
+    } else {
+        plain.n = (long)strlen(utf8);
+        plain.ops = &plain_op;
+        plain.nop = 1;
+        plain_op.end = plain.n;
+        plain_op.rate = t->rate;
+        plain_op.volume = t->volume;
+        plain_op.pitch = t->pitch;
+        d = &plain;
+        doc_text = utf8;
+    }
     t->doc = d;
     t->bmap = d->bmap;
     if (t->fx_on) {
@@ -628,7 +630,7 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
         }
         if (n <= 0) continue;
         if (o->end == d->n) {
-            run_text = d->text + o->start;
+            run_text = doc_text + o->start;
         } else {
             if (n + 1 > runcap) {
                 char *b = realloc(run, (size_t)n + 1);
@@ -639,7 +641,7 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
                 run = b;
                 runcap = n + 1;
             }
-            memcpy(run, d->text + o->start, (size_t)n);
+            memcpy(run, doc_text + o->start, (size_t)n);
             run[n] = 0;
             run_text = run;
         }
@@ -686,6 +688,11 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
     t->map = NULL;
     t->doc = NULL;
     t->bmap = NULL;
-    xdoc_free(d);
+    if (d != &plain) xdoc_free(d);
     return rc;
+}
+
+int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb)
+{
+    return sam_tts_speak_checked(t, utf8, flags, cb, NULL, NULL);
 }

@@ -218,7 +218,8 @@ static void on_pcm(const int16_t *pcm, size_t n, void *user)
     c->base += n;
 }
 
-int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callbacks *cb)
+int anna_tts_speak_checked(anna_tts *t, const char *utf8, int flags, const anna_callbacks *cb,
+                           int (*check_cancel)(void *), void *check_user)
 {
     speak_ctx c;
     anna_norm *nm;
@@ -226,6 +227,10 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
     int rc = 0;
     memset(&c, 0, sizeof c);
     anna_cancel_set(&t->cancel, 0);
+    if (check_cancel && check_cancel(check_user)) {
+        anna_cancel_set(&t->cancel, 1);
+        return 1;
+    }
     c.t = t;
     c.cb = cb;
     c.last_word = -1;
@@ -281,4 +286,9 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
     anna_norm_free(nm);
     free((void *)c.map);
     return rc;
+}
+
+int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callbacks *cb)
+{
+    return anna_tts_speak_checked(t, utf8, flags, cb, NULL, NULL);
 }

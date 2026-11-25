@@ -35,7 +35,7 @@ class SapiDroidWorkerService : Service() {
 
     private val state = Object()
     private var currentId = 0
-    private var currentVoice = ""
+    private var currentInfo: VoiceCatalog.Info? = null
     private var busy = false
     private var finished = true
     private var failed = false
@@ -149,6 +149,7 @@ class SapiDroidWorkerService : Service() {
             waitMs: Int
         ): Int {
             val id: Int
+            val info = VoiceCatalog.infoFor(voice)
             synchronized(state) {
                 if (destroyed) return BUSY
                 val deadline = SystemClock.elapsedRealtime() + waitMs.coerceIn(0, 5_000)
@@ -168,7 +169,7 @@ class SapiDroidWorkerService : Service() {
                 }
                 currentId += 1
                 id = currentId
-                currentVoice = voice
+                currentInfo = info
                 busy = true
                 finished = false
                 failed = false
@@ -176,7 +177,7 @@ class SapiDroidWorkerService : Service() {
                 pending.clear()
                 pendingOffset = 0
                 pendingBytes = 0
-                synthesis.submit { runRequest(id, voice, ratePercent, pitchPercent, text) }
+                synthesis.submit { runRequest(id, voice, info, ratePercent, pitchPercent, text) }
             }
             return id
         }
@@ -190,15 +191,32 @@ class SapiDroidWorkerService : Service() {
                     if (cancelled) return null
                     val buf = pending.peekFirst()
                     if (buf != null) {
-                        val n = minOf(limit, buf.size - pendingOffset)
-                        val out = if (pendingOffset == 0 && n == buf.size) buf
-                            else buf.copyOfRange(pendingOffset, pendingOffset + n)
-                        pendingOffset += n
-                        pendingBytes -= n
-                        if (pendingOffset == buf.size) {
-                            pending.removeFirst()
-                            pendingOffset = 0
+                        val n = minOf(limit, pendingBytes)
+                        val out: ByteArray
+                        if (n <= buf.size - pendingOffset) {
+                            out = if (pendingOffset == 0 && n == buf.size) buf
+                                else buf.copyOfRange(pendingOffset, pendingOffset + n)
+                            pendingOffset += n
+                            if (pendingOffset == buf.size) {
+                                pending.removeFirst()
+                                pendingOffset = 0
+                            }
+                        } else {
+                            out = ByteArray(n)
+                            var copied = 0
+                            while (copied < n) {
+                                val head = pending.peekFirst()
+                                val count = minOf(n - copied, head.size - pendingOffset)
+                                head.copyInto(out, copied, pendingOffset, pendingOffset + count)
+                                copied += count
+                                pendingOffset += count
+                                if (pendingOffset == head.size) {
+                                    pending.removeFirst()
+                                    pendingOffset = 0
+                                }
+                            }
                         }
+                        pendingBytes -= n
                         (state as java.lang.Object).notifyAll()
                         return out
                     }
@@ -230,7 +248,7 @@ class SapiDroidWorkerService : Service() {
                 pending.clear()
                 pendingOffset = 0
                 pendingBytes = 0
-                val info = VoiceCatalog.infoFor(currentVoice)
+                val info = currentInfo
                 val engine = info?.engine
                 val voiceName = info?.name ?: ""
                 val handle = when (engine) {
@@ -397,12 +415,12 @@ class SapiDroidWorkerService : Service() {
     private fun runRequest(
         id: Int,
         voice: String,
+        info: VoiceCatalog.Info?,
         ratePercent: Int,
         pitchPercent: Int,
         text: String
     ) {
         try {
-            val info = VoiceCatalog.infoFor(voice)
             if (BuildConfig.DEBUG && text.contains(HANG_PREFIX)) {
                 Log.w(TAG, "debug hang for request $id")
                 try {
@@ -416,15 +434,19 @@ class SapiDroidWorkerService : Service() {
                 synchronized(state) { failed = true }
                 return
             }
-            val sink = PcmSink { bytes -> enqueueAudio(id, bytes) }
-            for (piece in StreamingText.split(text)) {
-                if (isCancelled(id)) break
+            val sink = object : PcmSink {
+                override fun onPcm(bytes: ByteArray) = enqueueAudio(id, bytes)
+                override fun isCancelled() = this@SapiDroidWorkerService.isCancelled(id)
+            }
+            StreamingText.forEachChunk(text) { piece ->
+                if (isCancelled(id)) return@forEachChunk false
                 val result = synthChunk(id, info, ratePercent, pitchPercent, piece, sink)
                 if (result != 0) {
                     synchronized(state) { if (!cancelled) failed = true }
                     if (!isCancelled(id)) Log.e(TAG, "synthesis failed for $voice (status $result)")
-                    break
+                    return@forEachChunk false
                 }
+                true
             }
         } catch (t: Throwable) {
             Log.e(TAG, "synthesis failed", t)

@@ -169,8 +169,8 @@ static int queue_take_items(Queue *q, QItem **items, uint32_t *count) {
     uint32_t capacity = queue_count(q);
     size_t bytes = (size_t)capacity * sizeof(QItem);
     if (capacity && bytes / sizeof(QItem) != capacity) return 0;
-    QItem *out = malloc(bytes ? bytes : sizeof(QItem));
-    if (!out) return 0;
+    QItem *out = capacity ? malloc(bytes) : NULL;
+    if (capacity && !out) return 0;
     if (!queue_take_all(q, out, capacity, count)) {
         free(out);
         return 0;
@@ -450,18 +450,24 @@ int s4_set_speed(s4_engine *e, unsigned wpm) {
     return r;
 }
 
-int s4_speak(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn, void *user) {
+int s4_speak_checked(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn, void *user,
+                     int (*check_cancel)(void *), void *check_user) {
     if (!e || !text) return -1;
     pthread_mutex_lock(&g_lock);
     vc_ResetEvent(e->fe->abort_event);
     atomic_store(&e->stop, 0);
     atomic_store(&e->speaking, 1);
-    int r = run_text(e, text, flags, fn, user);
+    int r = (check_cancel && check_cancel(check_user)) || atomic_load(&e->stop)
+        ? 1 : run_text(e, text, flags, fn, user);
     atomic_store(&e->speaking, 0);
     atomic_store(&e->stop, 0);
     vc_ResetEvent(e->fe->abort_event);
     pthread_mutex_unlock(&g_lock);
     return r;
+}
+
+int s4_speak(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn, void *user) {
+    return s4_speak_checked(e, text, flags, fn, user, NULL, NULL);
 }
 
 void s4_stop(s4_engine *e) {
