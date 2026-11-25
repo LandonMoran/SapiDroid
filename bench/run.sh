@@ -32,7 +32,8 @@ mkdir -p "$OUT"
 
 # build <binary> <bench source> <kernel dir> <optimisation flags>
 # The kernel files are force-included, so the benchmark's calls and the file's static functions share
-# one translation unit exactly as they do inside the app.
+# one translation unit exactly as they do inside the app. OURS_FLAGS overrides this repository's
+# flags so a flag can be tried without editing the script (the digests still have to match).
 build() {
     name=$1
     src=$2
@@ -58,7 +59,7 @@ for v in sapi4 sapi5 anna onecore; do
     anna)    src=anna_bench.c;    ours="$ROOT/app/src/main/cpp/anna"; up="$UP/anna/src" ;;
     onecore) src=onecore_bench.c; ours="$ROOT/engine"; up="$UP/onecore/src" ;;
     esac
-    build "${v}_ours"        "$src" "$ours" "-O3"
+    build "${v}_ours"        "$src" "$ours" "${OURS_FLAGS:--O3}"
     build "${v}_upstream_o3" "$src" "$up"   "-O3"
     build "${v}_upstream_o2" "$src" "$up"   "-O2"
 done

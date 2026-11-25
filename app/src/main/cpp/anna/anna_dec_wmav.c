@@ -513,6 +513,8 @@ static void synth16(float *y, const float *x, const float *a, float *mem, int n)
         float s[4];
         double ym1 = y[j - 1], ym2 = y[j - 2], ym3 = y[j - 3];
         double T1, U, V, Y0, W1, W2, Y1, Y2, X;
+        /* Tried merging the four independent accumulators into one four-lane pass over k: same
+         * values, but the strided y[j + l - k] loads made it ~7% slower, so the four passes stay. */
         for (l = 0; l < 4; l++) {
             float acc = x[j + l];
             for (k = 16; k >= 4; k--) acc = acc - y[j + l - k] * a[k - 1];

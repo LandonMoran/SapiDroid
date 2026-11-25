@@ -120,6 +120,16 @@ void fft_inverse_real(float *restrict x, int n, int m, const float *restrict sin
     }
     if (n > 0) {
         const double dn = (double)n;
-        for (int i = 0; i < n; i++) x[i] = (float)((double)x[i] / dn);
+        if ((n & (n - 1)) == 0) {
+            // n is a power of two, so 1/n is an exact double and multiplying by it is the same
+            // operation as dividing by it, bit for bit (both are an exact scaling of the exponent
+            // unless the result is subnormal, where both round the same real number to nearest).
+            // Every size the engine uses takes this path, turning a divide per element into a
+            // multiply; any other size keeps the division.
+            const double rn = 1.0 / dn;
+            for (int i = 0; i < n; i++) x[i] = (float)((double)x[i] * rn);
+        } else {
+            for (int i = 0; i < n; i++) x[i] = (float)((double)x[i] / dn);
+        }
     }
 }
