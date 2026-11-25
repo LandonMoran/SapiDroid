@@ -88,14 +88,25 @@ object VoiceCatalog {
      * not choose a voice themselves: they set a language and take the engine's
      * default, which is this voice.
      */
+    @Volatile private var cachedDefaultLabel: String? = null
+    @Volatile private var defaultCacheValid = false
+
     fun savedVoice(context: Context): Info? {
-        val label = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_DEFAULT_VOICE, null) ?: return null
+        // In-memory cache first: the picker's choice is visible to the next
+        // utterance in this process without waiting on disk I/O.
+        if (!defaultCacheValid) {
+            cachedDefaultLabel = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_DEFAULT_VOICE, null)
+            defaultCacheValid = true
+        }
+        val label = cachedDefaultLabel ?: return null
         val info = infoFor(label) ?: return null
         return if (installed(context).any { it.label == info.label }) info else null
     }
 
     fun saveVoice(context: Context, info: Info) {
+        cachedDefaultLabel = info.label
+        defaultCacheValid = true
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_DEFAULT_VOICE, info.label).apply()
     }

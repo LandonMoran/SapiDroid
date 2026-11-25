@@ -36,7 +36,10 @@ class SapiDroidWorkerService : Service() {
     private var busy = false
     private var finished = true
     private var cancelled = false
-    private var pending: ByteArray? = null
+    // Audio produced so far for the current request, drained by pull().
+    // Chunks are appended as each sentence finishes so the first audio
+    // arrives after the first sentence, not after the whole text.
+    private var pending: ByteArray = ByteArray(0)
 
     private val ziraHandles = HashMap<String, Long>()
     private val annaHandles = HashMap<String, Long>()
@@ -157,7 +160,7 @@ class SapiDroidWorkerService : Service() {
                 busy = true
                 finished = false
                 cancelled = false
-                pending = null
+                pending = ByteArray(0)
             }
             synthesis.submit { runRequest(id, voice, ratePercent, pitchPercent, text) }
             return id
@@ -171,10 +174,10 @@ class SapiDroidWorkerService : Service() {
                     if (requestId != currentId) return null
                     if (cancelled) return null
                     val buf = pending
-                    if (buf != null && buf.isNotEmpty()) {
+                    if (buf.isNotEmpty()) {
                         val n = minOf(limit, buf.size)
                         val out = buf.copyOfRange(0, n)
-                        pending = if (n == buf.size) null else buf.copyOfRange(n, buf.size)
+                        pending = if (n == buf.size) ByteArray(0) else buf.copyOfRange(n, buf.size)
                         return out
                     }
                     if (finished) return null
@@ -200,7 +203,7 @@ class SapiDroidWorkerService : Service() {
             synchronized(state) {
                 if (requestId != currentId) return
                 cancelled = true
-                pending = null
+                pending = ByteArray(0)
                 engine = VoiceCatalog.infoFor(currentVoice)?.engine
                 handle = when (engine) {
                     VoiceCatalog.Engine.ONECORE -> ziraHandles[currentVoice] ?: 0L
@@ -280,6 +283,104 @@ class SapiDroidWorkerService : Service() {
     // Speaking
     // ------------------------------------------------------------------
 
+    private fun isCancelled(id: Int): Boolean = synchronized(state) {
+        id != currentId || cancelled
+    }
+
+    /**
+     * Splits long texts so the first audio ships after the first sentence
+     * instead of after the whole utterance. Every engine below already
+     * synthesizes sentence by sentence, so cutting on sentence boundaries
+     * keeps the output the same while first-audio latency drops from
+     * O(text) to O(first sentence).
+     */
+    private fun splitForStreaming(text: String): List<String> {
+        val trimmed = text.trim()
+        if (trimmed.length <= 350) return listOf(trimmed)
+        val out = mutableListOf<String>()
+        var start = 0
+        var i = 0
+        while (i < trimmed.length) {
+            val c = trimmed[i]
+            val endOfSentence = (c == '.' || c == '!' || c == '?') &&
+                (i + 1 >= trimmed.length || trimmed[i + 1].isWhitespace())
+            val hardBreak = c == '\n'
+            if ((endOfSentence || hardBreak) && i + 1 - start >= 60) {
+                var end = i + 1
+                while (end < trimmed.length && trimmed[end].isWhitespace()) end++
+                out.add(trimmed.substring(start, end).trim())
+                start = end
+                i = end
+                continue
+            }
+            if (i + 1 - start >= 450) {
+                var j = i
+                while (j > start && !trimmed[j].isWhitespace()) j--
+                if (j <= start) j = i
+                out.add(trimmed.substring(start, j).trim())
+                var next = j
+                while (next < trimmed.length && trimmed[next].isWhitespace()) next++
+                start = next
+                i = next
+                continue
+            }
+            i++
+        }
+        if (start < trimmed.length) out.add(trimmed.substring(start).trim())
+        return out.filter { it.isNotEmpty() }.ifEmpty { listOf(trimmed) }
+    }
+
+    private fun synthChunk(
+        info: VoiceCatalog.Info,
+        ratePercent: Int,
+        pitchPercent: Int,
+        piece: String
+    ): ShortArray? {
+        return when (info.engine) {
+            VoiceCatalog.Engine.ONECORE -> {
+                val h = openZira(info.name)
+                if (h == 0L) null else {
+                    NativeZira.setRate(h, sapi5Rate(ratePercent))
+                    NativeZira.setPitch(h, sapi5Pitch(pitchPercent))
+                    NativeZira.speak(h, piece)
+                }
+            }
+            VoiceCatalog.Engine.ANNA -> {
+                val h = openAnna(info.name)
+                if (h == 0L) null else {
+                    NativeAnna.setRate(h, sapi5Rate(ratePercent))
+                    NativeAnna.setPitch(h, sapi5Pitch(pitchPercent))
+                    NativeAnna.speak(h, piece)
+                }
+            }
+            VoiceCatalog.Engine.SAPI5 -> {
+                val h = openSapi5(info.name)
+                if (h == 0L) null else {
+                    NativeSapi5.setRate(h, sapi5Rate(ratePercent))
+                    NativeSapi5.setPitch(h, sapi5Pitch(pitchPercent))
+                    NativeSapi5.speak(h, piece)
+                }
+            }
+            VoiceCatalog.Engine.SAPI4 -> {
+                val h = openSapi4(info.name)
+                if (h == 0L) null else {
+                    val lim = NativeSapi4.limits(h)
+                    if (lim != null && lim.size >= 6) {
+                        NativeSapi4.setSpeed(
+                            h,
+                            scale(lim[3], ratePercent, lim[4], lim[5])
+                        )
+                        NativeSapi4.setPitch(
+                            h,
+                            scale(lim[0], pitchPercent, lim[1], lim[2])
+                        )
+                    }
+                    NativeSapi4.speak(h, piece.toByteArray(charset("windows-1252")))
+                }
+            }
+        }
+    }
+
     private fun runRequest(
         id: Int,
         voice: String,
@@ -288,63 +389,55 @@ class SapiDroidWorkerService : Service() {
         text: String
     ) {
         val info = VoiceCatalog.infoFor(voice)
-        val samples = try {
-            if (BuildConfig.DEBUG && text.contains(HANG_PREFIX)) {
-                Log.w(TAG, "debug hang for request $id")
+        if (BuildConfig.DEBUG && text.contains(HANG_PREFIX)) {
+            Log.w(TAG, "debug hang for request $id")
+            try {
                 Thread.sleep(120_000)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            synchronized(state) {
+                busy = false
+                finished = true
+                (state as java.lang.Object).notifyAll()
+            }
+            return
+        }
+        if (info == null) {
+            synchronized(state) {
+                busy = false
+                finished = true
+                (state as java.lang.Object).notifyAll()
+            }
+            return
+        }
+        // One native call per sentence: each chunk's PCM is published as
+        // soon as it is ready, so pull() unblocks long before the tail
+        // of a paragraph has been synthesized.
+        for (piece in splitForStreaming(text)) {
+            if (isCancelled(id)) break
+            val samples: ShortArray? = try {
+                synthChunk(info, ratePercent, pitchPercent, piece)
+            } catch (t: Throwable) {
+                Log.e(TAG, "synthesis failed", t)
                 null
-            } else if (info == null) {
-                null
-            } else when (info.engine) {
-                VoiceCatalog.Engine.ONECORE -> {
-                    val h = openZira(info.name)
-                    if (h == 0L) null else {
-                        NativeZira.setRate(h, sapi5Rate(ratePercent))
-                        NativeZira.setPitch(h, sapi5Pitch(pitchPercent))
-                        NativeZira.speak(h, text)
+            }
+            if (samples == null) {
+                // Keep whatever audio earlier chunks already published;
+                // an empty first chunk ends the request with no audio.
+                break
+            }
+            if (samples.isNotEmpty()) {
+                val bytes = toBytes(samples)
+                synchronized(state) {
+                    if (id == currentId && !cancelled) {
+                        pending = pending + bytes
                     }
-                }
-                VoiceCatalog.Engine.ANNA -> {
-                    val h = openAnna(info.name)
-                    if (h == 0L) null else {
-                        NativeAnna.setRate(h, sapi5Rate(ratePercent))
-                        NativeAnna.setPitch(h, sapi5Pitch(pitchPercent))
-                        NativeAnna.speak(h, text)
-                    }
-                }
-                VoiceCatalog.Engine.SAPI5 -> {
-                    val h = openSapi5(info.name)
-                    if (h == 0L) null else {
-                        NativeSapi5.setRate(h, sapi5Rate(ratePercent))
-                        NativeSapi5.setPitch(h, sapi5Pitch(pitchPercent))
-                        NativeSapi5.speak(h, text)
-                    }
-                }
-                VoiceCatalog.Engine.SAPI4 -> {
-                    val h = openSapi4(info.name)
-                    if (h == 0L) null else {
-                        val lim = NativeSapi4.limits(h)
-                        if (lim != null && lim.size >= 6) {
-                            NativeSapi4.setSpeed(
-                                h,
-                                scale(lim[3], ratePercent, lim[4], lim[5])
-                            )
-                            NativeSapi4.setPitch(
-                                h,
-                                scale(lim[0], pitchPercent, lim[1], lim[2])
-                            )
-                        }
-                        NativeSapi4.speak(h, text.toByteArray(charset("windows-1252")))
-                    }
+                    (state as java.lang.Object).notifyAll()
                 }
             }
-        } catch (t: Throwable) {
-            Log.e(TAG, "synthesis failed", t)
-            null
         }
-        val bytes = samples?.let { toBytes(it) }
         synchronized(state) {
-            if (id == currentId && !cancelled) pending = bytes
             busy = false
             finished = true
             (state as java.lang.Object).notifyAll()

@@ -6,13 +6,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
 import android.speech.tts.Voice
 import android.util.Log
-import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.abs
-import kotlin.math.ln
-import kotlin.math.log2
-import kotlin.math.roundToInt
 
 /**
  * SapiDroid: Microsoft's OneCore voices (David, Zira) as an Android TTS engine.
@@ -25,8 +20,10 @@ class SapiDroidService : TextToSpeechService() {
     companion object {
         private const val TAG = "SapiDroid"
         private const val BUSY = SapiDroidWorkerService.BUSY
-        private const val PULL_BYTES = 64 * 1024
-        private const val PULL_WAIT_MS = 200
+        // Small pulls so the first audio ships as soon as the first
+        // sentence is ready; later pulls keep draining while synthesis runs.
+        private const val PULL_BYTES = 16 * 1024
+        private const val PULL_WAIT_MS = 100
         private const val SAY_WAIT_MS = 400
         private const val RETIRE_GRACE_MS = 1_500L
     }
@@ -35,6 +32,9 @@ class SapiDroidService : TextToSpeechService() {
 
     @Volatile private var currentWorker: IZiraWorker? = null
     @Volatile private var currentRequest: Int = -1
+    // A voice's output rate never changes, so remember it after the first
+    // lookup and skip a binder round trip on every later utterance.
+    private val rateCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     // ------------------------------------------------------------------
     // Lifecycle
@@ -110,7 +110,28 @@ class SapiDroidService : TextToSpeechService() {
         }
     }
 
-    override fun onLoadVoice(voiceName: String?): Int = onIsValidVoiceName(voiceName)
+    override fun onLoadVoice(voiceName: String?): Int {
+        val result = onIsValidVoiceName(voiceName)
+        if (result == TextToSpeech.SUCCESS && voiceName != null && !rateCache.containsKey(voiceName)) {
+            // Warm the newly selected voice off this binder thread: pre-open
+            // its handle and sample rate on the worker, so the next
+            // utterance with it pays no file-load hitch and speaks at once.
+            Thread {
+                try {
+                    var worker = currentWorker
+                    if (worker == null || !worker.asBinder().isBinderAlive) {
+                        worker = SapiDroidWorkers.acquire(this)
+                        currentWorker = worker
+                    }
+                    val rate = worker?.sampleRate(voiceName) ?: 0
+                    if (rate > 0) rateCache[voiceName] = rate
+                } catch (t: Throwable) {
+                    Log.w(TAG, "voice warm-up failed", t)
+                }
+            }.apply { name = "sapidroid-voice-warm" }.start()
+        }
+        return result
+    }
 
     override fun onGetLanguage(): Array<String> = arrayOf("eng", "USA", "")
 
@@ -178,69 +199,67 @@ class SapiDroidService : TextToSpeechService() {
             "engine=${info.engine} chars=${text.length} rate=$ratePercent pitch=$pitchPercent")
 
         var worker = currentWorker
-        val pcm: ShortArray? = try {
+        try {
             if (worker == null || !worker.asBinder().isBinderAlive) {
                 worker = SapiDroidWorkers.acquire(this)
                 currentWorker = worker
             }
-            speak(worker, voice, ratePercent, pitchPercent, text)
         } catch (t: Throwable) {
             Log.e(TAG, "worker synthesis failed", t)
-            null
-        }
-
-        if (stopped.get()) {
-            callback.done()
-            return
-        }
-        if (pcm == null || pcm.isEmpty()) {
             callback.error()
             return
         }
-
-        val rateHz = try {
+        // Sample rate first: the worker caches the open handle, so this is
+        // one binder round trip (cached after the first utterance) and lets
+        // callback.start() run before any audio is synthesized instead of
+        // after all of it.
+        val rateHz = rateCache[voice] ?: try {
             worker?.sampleRate(voice) ?: 0
         } catch (t: Throwable) {
             0
-        }.takeIf { it > 0 } ?: VoiceCatalog.SAMPLE_RATE
+        }.takeIf { it > 0 }?.also { rateCache[voice] = it }
+            ?: VoiceCatalog.SAMPLE_RATE
 
-        try {
-            callback.start(rateHz, android.media.AudioFormat.ENCODING_PCM_16BIT, 1)
-            val bytes = shortsToLittleEndian(pcm)
-            val maxBuf = callback.maxBufferSize.coerceAtLeast(1024)
-            var off = 0
-            while (off < bytes.size && !stopped.get()) {
-                val n = minOf(maxBuf, bytes.size - off).coerceAtLeast(2)
-                if (callback.audioAvailable(bytes, off, n) != TextToSpeech.SUCCESS) break
-                off += n
-            }
-            callback.done()
-            Log.i(TAG, "request done voice=$voice frames=${pcm.size} sr=$rateHz")
+        val ok = try {
+            speak(worker!!, voice, ratePercent, pitchPercent, text, callback, rateHz)
         } catch (t: Throwable) {
-            Log.e(TAG, "streaming failed", t)
+            Log.e(TAG, "worker synthesis failed", t)
+            false
+        }
+        if (stopped.get()) {
+            try {
+                callback.done()
+            } catch (t: Throwable) {
+                Log.w(TAG, "callback.done failed", t)
+            }
+            return
+        }
+        if (!ok) {
             try {
                 callback.error()
-            } catch (t2: Throwable) {
-                Log.e(TAG, "callback.error failed", t2)
+            } catch (t: Throwable) {
+                Log.w(TAG, "callback.error failed", t)
             }
         }
     }
 
-    /** One utterance through the worker, pulled in bounded blocks. */
+    /** One utterance through the worker, streamed to the callback as it arrives. */
     private fun speak(
         startWorker: IZiraWorker,
         voice: String,
         ratePercent: Int,
         pitchPercent: Int,
-        text: String
-    ): ShortArray? {
+        text: String,
+        callback: SynthesisCallback,
+        rateHz: Int
+    ): Boolean {
         var worker = startWorker
         var replaced = false
         while (true) {
             try {
-                return speakOnce(worker, voice, ratePercent, pitchPercent, text)
+                return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz)
             } catch (e: WorkerGone) {
-                if (replaced || stopped.get()) return null
+                if (replaced || stopped.get()) return false
                 replaced = true
                 Log.w(TAG, "replacing engine worker: ${e.message}")
                 worker = SapiDroidWorkers.replace(this, worker)
@@ -256,67 +275,101 @@ class SapiDroidService : TextToSpeechService() {
         voice: String,
         ratePercent: Int,
         pitchPercent: Int,
-        text: String
-    ): ShortArray? {
+        text: String,
+        callback: SynthesisCallback,
+        rateHz: Int
+    ): Boolean {
         val id = try {
             worker.say(voice, ratePercent, pitchPercent, text, SAY_WAIT_MS)
         } catch (t: Throwable) {
             SapiDroidWorkers.retire(worker)
             throw WorkerGone("say failed", t)
         }
-        if (id == BUSY) {
-            SapiDroidWorkers.retire(worker)
-            throw WorkerGone("engine stayed busy")
+        val requestId = if (id == BUSY) {
+            // A transient overlap (e.g. flush racing the previous tail)
+            // should not kill the worker process: one quick retry on the
+            // same worker covers it; only a stuck engine retires it.
+            try {
+                Thread.sleep(120)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw WorkerGone("interrupted", e)
+            }
+            val retry = try {
+                worker.say(voice, ratePercent, pitchPercent, text, SAY_WAIT_MS)
+            } catch (t: Throwable) {
+                SapiDroidWorkers.retire(worker)
+                throw WorkerGone("say retry failed", t)
+            }
+            if (retry == BUSY) {
+                SapiDroidWorkers.retire(worker)
+                throw WorkerGone("engine stayed busy")
+            }
+            if (retry < 0) throw WorkerGone("say refused")
+            retry
+        } else {
+            if (id < 0) throw WorkerGone("say refused")
+            id
         }
-        if (id < 0) throw WorkerGone("say refused")
-        currentRequest = id
-        val buffer = ByteArrayOutputStream(text.length * 32)
+        currentRequest = requestId
+        var started = false
+        var frames = 0L
         try {
+            val maxBuf = callback.maxBufferSize.coerceAtLeast(1024)
             while (true) {
                 if (stopped.get()) {
                     try {
-                        worker.cancel(id)
+                        worker.cancel(requestId)
                     } catch (t: Throwable) {
                         Log.w(TAG, "cancel failed", t)
                     }
-                    return null
+                    return false
                 }
-                val block = worker.pull(id, PULL_BYTES, PULL_WAIT_MS)
+                val block = try {
+                    worker.pull(requestId, PULL_BYTES, PULL_WAIT_MS)
+                } catch (t: Throwable) {
+                    SapiDroidWorkers.retire(worker)
+                    throw WorkerGone("pull failed", t)
+                }
                 if (block != null && block.isNotEmpty()) {
-                    buffer.write(block)
+                    if (!started) {
+                        callback.start(rateHz, android.media.AudioFormat.ENCODING_PCM_16BIT, 1)
+                        started = true
+                    }
+                    var off = 0
+                    while (off < block.size) {
+                        if (stopped.get()) {
+                            try {
+                                worker.cancel(requestId)
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "cancel failed", t)
+                            }
+                            return false
+                        }
+                        val n = minOf(maxBuf, block.size - off).coerceAtLeast(2)
+                        if (callback.audioAvailable(block, off, n) != TextToSpeech.SUCCESS) break
+                        off += n
+                    }
+                    frames += block.size / 2L
                     continue
                 }
-                if (worker.finished(id)) break
+                try {
+                    if (worker.finished(requestId)) break
+                } catch (t: Throwable) {
+                    SapiDroidWorkers.retire(worker)
+                    throw WorkerGone("finished failed", t)
+                }
             }
-        } catch (t: Throwable) {
-            SapiDroidWorkers.retire(worker)
-            throw WorkerGone("pull failed", t)
         } finally {
             currentRequest = -1
         }
-        return littleEndianToShorts(buffer.toByteArray())
-    }
-
-    private fun shortsToLittleEndian(samples: ShortArray): ByteArray {
-        val out = ByteArray(samples.size * 2)
-        var j = 0
-        for (s in samples) {
-            val v = s.toInt()
-            out[j++] = (v and 0xFF).toByte()
-            out[j++] = ((v shr 8) and 0xFF).toByte()
+        if (!started) return false
+        try {
+            callback.done()
+            Log.i(TAG, "request done voice=$voice frames=$frames sr=$rateHz")
+        } catch (t: Throwable) {
+            Log.e(TAG, "callback.done failed", t)
         }
-        return out
-    }
-
-    private fun littleEndianToShorts(bytes: ByteArray): ShortArray {
-        val count = bytes.size / 2
-        if (count == 0) return ShortArray(0)
-        val out = ShortArray(count)
-        var j = 0
-        for (i in 0 until count) {
-            out[i] = ((bytes[j].toInt() and 0xFF) or (bytes[j + 1].toInt() shl 8)).toShort()
-            j += 2
-        }
-        return out
+        return true
     }
 }
