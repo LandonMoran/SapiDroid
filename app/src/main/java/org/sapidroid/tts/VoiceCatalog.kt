@@ -91,11 +91,15 @@ object VoiceCatalog {
     @Volatile private var cachedDefaultLabel: String? = null
     @Volatile private var defaultCacheValid = false
 
+    /** Device-protected storage, so the default voice survives Direct Boot. */
+    private fun storage(context: Context): Context = DeviceStorage.context(context)
+
     fun savedVoice(context: Context): Info? {
         // In-memory cache first: the picker's choice is visible to the next
         // utterance in this process without waiting on disk I/O.
+        val store = storage(context)
         if (!defaultCacheValid) {
-            cachedDefaultLabel = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            cachedDefaultLabel = store.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_DEFAULT_VOICE, null)
             defaultCacheValid = true
         }
@@ -104,10 +108,15 @@ object VoiceCatalog {
         return if (installed(context).any { it.label == info.label }) info else null
     }
 
+    /**
+     * Remembers the picker's choice. The in-memory copy applies at once; the
+     * disk write must target device-protected storage too, or a reboot
+     * before unlock would forget the voice on the lock screen.
+     */
     fun saveVoice(context: Context, info: Info) {
         cachedDefaultLabel = info.label
         defaultCacheValid = true
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        storage(context).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_DEFAULT_VOICE, info.label).apply()
     }
 
@@ -118,7 +127,7 @@ object VoiceCatalog {
      * engines keep one folder each.
      */
     fun installed(context: android.content.Context): List<Info> {
-        val files = context.filesDir
+        val files = storage(context).filesDir
         val oneCore = java.io.File(files, "voice")
         val anna = java.io.File(files, "anna")
         val sapi4 = java.io.File(files, "sapi4")

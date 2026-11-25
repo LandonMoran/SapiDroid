@@ -34,9 +34,12 @@ object SappleVoices {
 
     private const val APP = "Payload/Sapple.app/PlugIns/ClassicVoicesExtension.appex/"
 
+    /** Device-protected storage, shared with the engine for Direct Boot. */
+    private fun store(context: Context): Context = DeviceStorage.context(context)
+
     /** True when the bundle is already on disk, so a second pick costs nothing. */
     fun cached(context: Context): File? {
-        val f = File(File(context.cacheDir, "sapple"), "Sapple.ipa")
+        val f = File(File(store(context).cacheDir, "sapple"), "Sapple.ipa")
         return if (f.exists() && f.length() == BYTES) f else null
     }
 
@@ -45,7 +48,7 @@ object SappleVoices {
      */
     fun installAnna(context: Context, progress: (String) -> Unit): List<String> {
         val ipa = ensure(context, progress)
-        val out = File(context.filesDir, "anna").also { it.mkdirs() }
+        val out = File(store(context).filesDir, "anna").also { it.mkdirs() }
         val wanted = listOf("CSD", "IDX", "UNT", "CRT", "APL", "UDT", "TTS", "LTS", "WIH", "KEY", "HAN")
         val written = mutableListOf<String>()
         java.util.zip.ZipFile(ipa).use { zip ->
@@ -76,7 +79,7 @@ object SappleVoices {
         progress: (String) -> Unit
     ): List<String> {
         val ipa = ensure(context, progress)
-        val out = File(context.filesDir, "voice").also { it.mkdirs() }
+        val out = File(store(context).filesDir, "voice").also { it.mkdirs() }
         val written = mutableListOf<String>()
         java.util.zip.ZipFile(ipa).use { zip ->
             val entries = zip.entries().toList()
@@ -127,7 +130,7 @@ object SappleVoices {
     /** Deletes the cached bundle; called when the app closes. */
     fun dropCache(context: Context) {
         try {
-            File(context.cacheDir, "sapple").deleteRecursively()
+            File(store(context).cacheDir, "sapple").deleteRecursively()
         } catch (t: Throwable) {
             Log.w(TAG, "could not delete the cached bundle", t)
         }
@@ -139,7 +142,7 @@ object SappleVoices {
             progress("Using the bundle already downloaded.")
             return it
         }
-        val dir = File(context.cacheDir, "sapple").also { it.mkdirs() }
+        val dir = File(store(context).cacheDir, "sapple").also { it.mkdirs() }
         val dest = File(dir, "Sapple.ipa")
         dest.delete()
         progress("Downloading Sapple's bundle from ${HOST}…")

@@ -30,8 +30,12 @@
             android:exported="false"
             android:label="Download OneCore voices" />
 
+        <!-- Direct Boot aware: the engine keeps speaking on the lock screen
+             after a reboot, before the first unlock. Voice data lives in
+             device-protected storage (see DeviceStorage) for the same reason. -->
         <service
             android:name=".SapiDroidService"
+            android:directBootAware="true"
             android:exported="true"
             android:label="@string/engine_label">
             <intent-filter>
@@ -46,6 +50,7 @@
         <!-- The engine, in a process of its own. Never exported. -->
         <service
             android:name=".SapiDroidWorkerService"
+            android:directBootAware="true"
             android:exported="false"
             android:process=":engine" />
 

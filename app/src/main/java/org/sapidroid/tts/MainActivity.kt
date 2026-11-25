@@ -39,6 +39,10 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Carry installed voices into device-protected storage once, so the
+        // engine also works during Direct Boot (lock screen before unlock).
+        Thread { DeviceStorage.migrateIfNeeded(applicationContext) }
+            .apply { name = "sapidroid-storage-migrate" }.start()
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
         resultText = findViewById(R.id.resultText)
@@ -360,9 +364,10 @@ class MainActivity : Activity() {
     }
 
     private fun showVoiceData() {
-        val oneCore = java.io.File(filesDir, "voice")
-        val s4 = java.io.File(filesDir, "sapi4")
-        val s5 = java.io.File(filesDir, "sapi5")
+        val store = DeviceStorage.context(this).filesDir
+        val oneCore = java.io.File(store, "voice")
+        val s4 = java.io.File(store, "sapi4")
+        val s5 = java.io.File(store, "sapi5")
         fun has(dir: java.io.File, name: String) = java.io.File(dir, name).exists()
         statusText.text = buildString {
             append("OneCore: ")
@@ -373,7 +378,7 @@ class MainActivity : Activity() {
             )
             if (!has(oneCore, SappleVoices.SHARED_DATA)) append("; shared data missing")
             append(SEP + "Anna: ")
-            append(if (has(java.io.File(filesDir, "anna"), "M1033DSK.CSD")) "installed" else "not installed")
+            append(if (has(java.io.File(store, "anna"), "M1033DSK.CSD")) "installed" else "not installed")
             append(SEP + "SAPI 4: ")
             val sapi4 = has(s4, "msttssyn.dll") && has(s4, "sam.vce") &&
                 has(s4, "male.vce") && has(s4, "female.vce")

@@ -44,6 +44,9 @@ class SapiDroidService : TextToSpeechService() {
         super.onCreate()
         Thread {
             try {
+                // One-time carry-over of voice data into device-protected
+                // storage, so Direct Boot (lock screen) can read it.
+                DeviceStorage.migrateIfNeeded(this)
                 currentWorker = SapiDroidWorkers.acquire(this)
             } catch (t: Throwable) {
                 Log.e(TAG, "engine worker warm-up failed", t)

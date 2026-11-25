@@ -266,10 +266,13 @@ class SapiDroidWorkerService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        ziraDir = File(filesDir, "voice").also { it.mkdirs() }
-        annaDir = File(filesDir, "anna").also { it.mkdirs() }
-        s4Dir = File(filesDir, "sapi4").also { it.mkdirs() }
-        s5Dir = File(filesDir, "sapi5").also { it.mkdirs() }
+        // Device-protected storage: the engine's files stay readable during
+        // Direct Boot, so the lock screen keeps speaking before first unlock.
+        val store = DeviceStorage.context(this)
+        ziraDir = File(store.filesDir, "voice").also { it.mkdirs() }
+        annaDir = File(store.filesDir, "anna").also { it.mkdirs() }
+        s4Dir = File(store.filesDir, "sapi4").also { it.mkdirs() }
+        s5Dir = File(store.filesDir, "sapi5").also { it.mkdirs() }
         Thread {
             try {
                 openZira(VoiceCatalog.defaultVoice)

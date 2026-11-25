@@ -42,7 +42,7 @@ class OneCoreVoicesActivity : Activity() {
 
     /** Usable only with the voice's own files and the shared table beside them. */
     private fun installed(pack: OneCorePacks.Pack): Boolean {
-        val dir = File(filesDir, "voice")
+        val dir = File(DeviceStorage.context(this).filesDir, "voice")
         return File(dir, "M1033${pack.voice}.APM").isFile &&
             File(dir, SappleVoices.SHARED_DATA).isFile
     }

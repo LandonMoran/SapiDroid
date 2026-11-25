@@ -64,7 +64,8 @@ object VoiceDataInstaller {
         sourceExe: File? = null,
         progress: (String) -> Unit
     ): List<String> {
-        val cache = File(context.cacheDir, "sapi5-download")
+        val store = DeviceStorage.context(context)
+        val cache = File(store.cacheDir, "sapi5-download")
         cache.mkdirs()
         val exe = File(cache, "SpeechSDK51.exe")
         val cab = File(cache, "Data.Cab")
@@ -96,7 +97,7 @@ object VoiceDataInstaller {
             }
 
             progress("Unpacking the voices…")
-            val outDir = File(context.filesDir, "sapi5")
+            val outDir = File(store.filesDir, "sapi5")
             val files = CabExtractor.extract(cab, ::wantedName, outDir)
             val names = files.map { it.name }.sorted()
             Log.i(TAG, "SAPI 5 installed: $names")
@@ -118,7 +119,7 @@ object VoiceDataInstaller {
      * reach the engine. Returns the names written.
      */
     fun installSapi4(context: Context, progress: (String) -> Unit): List<String> {
-        val outDir = File(context.filesDir, "sapi4")
+        val outDir = File(DeviceStorage.context(context).filesDir, "sapi4")
         outDir.mkdirs()
         val names = mutableListOf<String>()
         var doneBytes = 0L
