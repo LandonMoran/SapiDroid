@@ -3,6 +3,7 @@ name: Android build
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -120,3 +121,104 @@ jobs:
           if ! timeout 300 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'; then cat "$RUNNER_TEMP/emulator.log"; exit 1; fi
       - name: Exercise speech fallback
         run: ./gradlew :app:connectedDebugAndroidTest -PemulatorTests --console=plain
+
+  profile-on-emulator:
+    # Opt-in, and expensive: it boots an emulator, lets the app download Microsoft's voice data
+    # (the app owns those URLs), synthesizes a few sentences per engine and uploads the exported
+    # profile tables. Run it from the Actions tab, or push a commit whose message says
+    # [profile-run]. Not on every push: the downloads are ~270 MB of third-party data.
+    #
+    # These are emulator numbers: the DSP runs natively under KVM on a Xeon, so absolute
+    # milliseconds are far below a phone's. What transfers is the shape of the request — which
+    # row dominates, and how much of the engine call is spent blocked on the audio queue.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[profile-run]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build the profiling APK
+        run: ./gradlew :app:assembleDebug -Pprofile --console=plain
+      - name: Prepare emulator
+        run: |
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "system-images;android-34;default;x86_64"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n profile -k "system-images;android-34;default;x86_64"
+          "$ANDROID_HOME/emulator/emulator" -avd profile -no-window -no-audio -no-snapshot \
+            -gpu swiftshader_indirect -memory 2048 -partition-size 4096 > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator_pid=$!
+          sleep 10
+          if ! kill -0 "$emulator_pid" 2>/dev/null; then cat "$RUNNER_TEMP/emulator.log"; exit 1; fi
+          if ! timeout 180 adb wait-for-device; then cat "$RUNNER_TEMP/emulator.log"; exit 1; fi
+          if ! timeout 300 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'; then cat "$RUNNER_TEMP/emulator.log"; exit 1; fi
+          adb shell wm dismiss-keyguard || true
+      - name: Install the profiling APK
+        run: |
+          adb install -r app/build/outputs/apk/debug/app-debug.apk
+          adb shell pm list packages | grep org.sapidroid.tts
+      - name: Download the voice data through the app
+        run: |
+          set -x
+          # The app knows the URLs and where the files belong; these are its own headless hooks
+          # (debug builds only): --es getdata sapi5|anna|onecore [--es voice NAME].
+          wait_for() { # $1 description, $2 absolute path the app should create, $3 timeout seconds
+            for _ in $(seq 1 $(( $3 / 5 ))); do
+              if adb shell run-as org.sapidroid.tts ls "$2" > /dev/null 2>&1; then
+                echo "$1 ready"; return 0
+              fi
+              sleep 5
+            done
+            echo "$1 did not appear within $3 s"
+            adb logcat -d -s SapiDroidUi:* SapiDroidStorage:* SapiDroidNative:* | tail -60
+            return 1
+          }
+          adb shell am start -W -n org.sapidroid.tts/.MainActivity --es getdata sapi5
+          wait_for "SAPI 5" /data/user_de/0/org.sapidroid.tts/files/sapi5/Sam.spd 900
+          adb shell am force-stop org.sapidroid.tts
+          adb shell am start -W -n org.sapidroid.tts/.MainActivity --es getdata onecore --es voice David
+          wait_for "OneCore David" /data/user_de/0/org.sapidroid.tts/files/voice/M1033David.APM 1200
+      - name: Profile a few requests per engine
+        run: |
+          set -x
+          adb logcat -c || true
+          say() { # $1 voice name, $2 sentence
+            adb shell am force-stop org.sapidroid.tts
+            adb shell am start -W -n org.sapidroid.tts/.MainActivity --es autospeak "$2" --es voice "$1"
+            sleep 30
+          }
+          SENTENCE="The quick brown fox jumps over the lazy dog while the band plays a long, steady tune."
+          for _ in 1 2 3; do say David "$SENTENCE"; done
+          for _ in 1 2 3; do say Sam5 "$SENTENCE"; done
+      - name: Pull the exported tables
+        run: |
+          set -x
+          mkdir -p "$RUNNER_TEMP/profile-run"
+          adb pull /sdcard/Android/data/org.sapidroid.tts/files/profile/profiling.txt "$RUNNER_TEMP/profile-run/profiling.txt"
+          cat "$RUNNER_TEMP/profile-run/profiling.txt"
+          tables=$(grep -c '=== profile' "$RUNNER_TEMP/profile-run/profiling.txt" || true)
+          echo "tables: $tables"
+          test "$tables" -gt 0
+      - name: Keep the logcat too
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/profile-run"
+          adb logcat -d > "$RUNNER_TEMP/profile-run/logcat.txt" || true
+          adb shell run-as org.sapidroid.tts ls -l /data/user_de/0/org.sapidroid.tts/files/sapi5 \
+            > "$RUNNER_TEMP/profile-run/sapi5-files.txt" 2>&1 || true
+          adb shell run-as org.sapidroid.tts ls -l /data/user_de/0/org.sapidroid.tts/files/voice \
+            > "$RUNNER_TEMP/profile-run/voice-files.txt" 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sapidroid-profile-run
+          path: ${{ runner.temp }}/profile-run/
