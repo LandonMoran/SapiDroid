@@ -20,6 +20,15 @@ jobs:
           cc -shared -fPIC -std=c99 -Wall -Wextra -Werror -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" app/src/test/native/pcm_stream_test.c -o "$RUNNER_TEMP/pcm-test/libpcm-test.so"
           javac -d "$RUNNER_TEMP/pcm-test" app/src/test/native/PcmStreamTest.java
           java -cp "$RUNNER_TEMP/pcm-test" PcmStreamTest "$RUNNER_TEMP/pcm-test/libpcm-test.so"
+      - name: Test native engine fast paths
+        run: |
+          for test in onecore_fast_path_test anna_fast_path_test sapi5_fast_path_test; do
+            cc -std=c99 -O2 -ffunction-sections -fdata-sections "app/src/test/native/$test.c" -Wl,--gc-sections -lm -o "$RUNNER_TEMP/$test"
+            "$RUNNER_TEMP/$test"
+          done
+          cc -std=c99 -O2 -ffp-contract=off -fno-fast-math app/src/test/native/onecore_cancel_test.c engine/*.c \
+            -Wl,--wrap=zb_tree_leaf,--wrap=zb_state_gauss -lm -o "$RUNNER_TEMP/onecore_cancel_test"
+          "$RUNNER_TEMP/onecore_cancel_test"
       - name: Build and test
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --console=plain
       - uses: actions/upload-artifact@v4

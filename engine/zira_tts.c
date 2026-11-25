@@ -212,6 +212,10 @@ static int sink(void *user, const short *pcm, int n)
     const ZbTrace *tr = c->tr;
     long *cum = NULL, done = 0;
     int i, p, s;
+    if (!c->cb->event) {
+        deliver(c, pcm, n);
+        return c->stopped;
+    }
     if (tr && tr->dur && tr->nframe > 0 && (cum = (long *)malloc(sizeof(long) * ((size_t)tr->nphone + 1))) != NULL) {
         long f = 0;
         for (p = 0; p < tr->nphone; p++) {
@@ -260,8 +264,8 @@ static int speak_piece(zira_tts *t, speak_ctx *c, const char *piece, int xml, Zb
     zf_sentence s;
     int rc = 0;
     long nmap = 0;
-    long *map = utf16_to_utf8_map(piece, &nmap);
-    if (!map) return -1;
+    long *map = c->cb->event ? utf16_to_utf8_map(piece, &nmap) : NULL;
+    if (c->cb->event && !map) return -1;
     c->map = map;
     c->nmap = nmap;
     if (zb_emotion(vb, t->emotion, &t->sapi.style)) memset(&t->sapi.style, 0, sizeof t->sapi.style);
@@ -273,11 +277,13 @@ static int speak_piece(zira_tts *t, speak_ctx *c, const char *piece, int xml, Zb
         memset(&u, 0, sizeof u);
         memset(&ev, 0, sizeof ev);
         memset(&tr, 0, sizeof tr);
-        if (zf2_process(vf, &s, &u, &ev) == 0 && u.nphone > 0) {
+        if (zf2_process(vf, &s, &u, c->cb->event ? &ev : NULL) == 0 && u.nphone > 0) {
             apply_controls(t, &u);
-            c->ev = &ev;
-            c->tr = &tr;
-            if (zb_synth(vb, &u, &t->sapi, sink, c, &tr) && !c->stopped) rc = -1;
+            c->ev = c->cb->event ? &ev : NULL;
+            c->tr = c->cb->event ? &tr : NULL;
+            int synth_rc = zb_synth_cancelable(vb, &u, &t->sapi, sink, c,
+                                               c->cb->event ? &tr : NULL, &t->cancel);
+            if (synth_rc && !c->stopped && !t->cancel) rc = -1;
             c->ev = NULL;
             c->tr = NULL;
             zb_trace_free(&tr);

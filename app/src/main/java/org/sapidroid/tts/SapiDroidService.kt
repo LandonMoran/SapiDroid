@@ -1,7 +1,6 @@
 package org.sapidroid.tts
 
 import android.os.Looper
-import android.os.SystemClock
 import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
@@ -212,7 +211,6 @@ class SapiDroidService : TextToSpeechService() {
     }
 
     private fun synthesize(request: SynthesisRequest, callback: SynthesisCallback) {
-        val startedAt = if (Log.isLoggable(TAG, Log.DEBUG)) SystemClock.elapsedRealtimeNanos() else 0L
         val text = request.charSequenceText?.toString()?.trim().orEmpty()
         if (text.isEmpty()) {
             callback.start(VoiceCatalog.SAMPLE_RATE, android.media.AudioFormat.ENCODING_PCM_16BIT, 1)
@@ -268,7 +266,7 @@ class SapiDroidService : TextToSpeechService() {
 
         val delivered = AtomicBoolean(false)
         val ok = try {
-            speak(worker!!, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered, startedAt)
+            speak(worker!!, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered)
         } catch (t: Throwable) {
             Log.e(TAG, "worker synthesis failed", t)
             false
@@ -301,14 +299,13 @@ class SapiDroidService : TextToSpeechService() {
         text: String,
         callback: SynthesisCallback,
         rateHz: Int,
-        delivered: AtomicBoolean,
-        startedAt: Long
+        delivered: AtomicBoolean
     ): Boolean {
         var worker = startWorker
         var replaced = false
         while (true) {
             try {
-                return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered, startedAt)
+                return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered)
             } catch (e: WorkerGone) {
                 if (!mayRetryWorker(replaced, stopped.get(), delivered.get())) return false
                 replaced = true
@@ -329,8 +326,7 @@ class SapiDroidService : TextToSpeechService() {
         text: String,
         callback: SynthesisCallback,
         rateHz: Int,
-        delivered: AtomicBoolean,
-        startedAt: Long
+        delivered: AtomicBoolean
     ): Boolean {
         val id = try {
             worker.say(voice, ratePercent, pitchPercent, text, SAY_WAIT_MS)
@@ -404,10 +400,6 @@ class SapiDroidService : TextToSpeechService() {
                         if (callback.audioAvailable(block, off, n) != TextToSpeech.SUCCESS) {
                             worker.cancel(requestId)
                             return false
-                        }
-                        if (startedAt != 0L && frames == 0L && off == 0) {
-                            val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000
-                            Log.d(TAG, "first audio callback voice=$voice latency_ms=$elapsedMs")
                         }
                         off += n
                     }

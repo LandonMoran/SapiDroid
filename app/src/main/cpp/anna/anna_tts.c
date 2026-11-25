@@ -225,9 +225,9 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
     c.t = t;
     c.cb = cb;
     c.last_word = -1;
-    c.map = utf16_to_utf8_map(utf8, &c.nmap);
+    c.map = cb->event ? utf16_to_utf8_map(utf8, &c.nmap) : NULL;
     nm = anna_norm_new(utf8, (flags & ANNA_SPEAK_XML ? ANNA_NORM_XML : 0) | (flags & ANNA_SPEAK_PUNCTUATION ? ANNA_NORM_SPEAK_PUNC : 0));
-    if (!c.map || !nm) {
+    if ((cb->event && !c.map) || !nm) {
         free((void *)c.map);
         if (nm) anna_norm_free(nm);
         return -1;
@@ -238,7 +238,7 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
     o.sapi_volume = t->volume;
     o.pitch_offset = t->pitch;
     o.cancel = &t->cancel;
-    o.item_cb = on_item;
+    o.item_cb = cb->event ? on_item : NULL;
     o.user = &c;
     anna_mid_reset(t->mid); /* one Speak() */
     while (!t->cancel) {
@@ -263,7 +263,7 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
                 break;
             }
         }
-        if (!t->cancel) emit_bookmarks(&c, c.base, -1); /* bookmarks after the last word */
+        if (!t->cancel && cb->event) emit_bookmarks(&c, c.base, -1); /* bookmarks after the last word */
     }
     if (t->cancel || c.stopped) rc = rc < 0 ? rc : 1;
     else if (rc == 0 && cb->event) {

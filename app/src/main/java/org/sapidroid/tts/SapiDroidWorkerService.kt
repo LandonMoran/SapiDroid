@@ -50,6 +50,7 @@ class SapiDroidWorkerService : Service() {
     private val annaHandles = ConcurrentHashMap<String, Long>()
     private val s4Handles = ConcurrentHashMap<String, Long>()
     private val s5Handles = ConcurrentHashMap<String, Long>()
+    private val s4Limits = HashMap<String, IntArray>()
 
     @Volatile private var ziraDir: File? = null
     @Volatile private var annaDir: File? = null
@@ -357,7 +358,9 @@ class SapiDroidWorkerService : Service() {
             VoiceCatalog.Engine.SAPI4 -> {
                 val h = openSapi4(info.name)
                 if (h == 0L || isCancelled(id)) -1 else {
-                    val lim = NativeSapi4.limits(h)
+                    val lim = s4Limits[info.name] ?: NativeSapi4.limits(h)?.also {
+                        if (it.size >= 6) s4Limits[info.name] = it
+                    }
                     if (lim != null && lim.size >= 6) {
                         NativeSapi4.setSpeed(
                             h,
@@ -495,6 +498,7 @@ class SapiDroidWorkerService : Service() {
                 }
             }
             s4Handles.clear()
+            s4Limits.clear()
             for (h in s5Handles.values) {
                 try {
                     NativeSapi5.close(h)
