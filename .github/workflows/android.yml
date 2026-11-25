@@ -147,12 +147,14 @@ jobs:
       - name: Build the profiling APK
         timeout-minutes: 20
         run: |
+          # -PemulatorTests is what adds the x86_64 ABI (the APK is arm-only otherwise, and the
+          # emulator is x86_64: INSTALL_FAILED_NO_MATCHING_ABIS). -Pprofile turns the timing on.
           # A cold runner has to fetch the NDK and CMake; that fetch failed once already, so one
           # retry, and keep the log where the artifact can reach it.
           set -o pipefail
           status=1
           for attempt in 1 2; do
-            if ./gradlew :app:assembleDebug -Pprofile --console=plain > "$RUNNER_TEMP/build.log" 2>&1; then
+            if ./gradlew :app:assembleDebug -Pprofile -PemulatorTests --console=plain > "$RUNNER_TEMP/build.log" 2>&1; then
               status=0
               break
             fi
