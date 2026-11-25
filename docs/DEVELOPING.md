@@ -238,41 +238,59 @@ adb logcat -s SapiDroidProf
 
 `-Pprofile` defines `SAPIDROID_PROFILE` for the native build (see `app/src/main/cpp/CMakeLists.txt`)
 and sets `BuildConfig.PROFILE` for Kotlin. Without it every instrumentation site compiles to
-nothing, so release builds are untouched. Each speak call or request then logs one table, ranked by
-accumulated time, e.g.
+nothing, so release builds are untouched.
+
+There is exactly one table per request: `onSynthesizeText` empties it on entry and prints it when
+the request ends, so counts and totals describe that request alone. The engine runs in its own
+process, so the rows it collects (`load:voice`, `speak:*`, `jni:pcm_copy`, `audio:queue_push`) are
+handed over by `IZiraWorker.profileTake()` as each chunk finishes and folded into the service's
+table; both halves are then ranked together. A request that speaks several chunks adds them up
+(the count column shows how many samples went into a row). Rows the engine collected outside any
+request — a voice prewarm, a `probe` — are dropped when the first chunk starts, so they cannot be
+blamed on the wrong request. The table is one per process, so two requests overlapping in the same
+process would be summed into one table; the worker admits one utterance at a time, which keeps that
+rare for the engine rows. One request looks like:
 
 ```
 === profile request #4 (9 points, ms of accumulated time)
 point                    count   total ms     avg us     max us   Mbytes
 speak:call                   3      182.400    60800.0    102400.0        -
 speak:first_pcm              3       41.900    13966.7     20100.0        -
-audio:deliver              214       38.700      180.8      10400.0        -
-jni:pcm_copy               214        4.100       19.2        120.0     0.44
-audio:queue_push           214        1.900        8.9        260.0        -
+audio:deliver              214       38.700      180.8     10400.0        -
 audio:pull                 215       12.400       57.7        900.0        -
 load:voice                   1        9.800     9800.0       9800.0        -
-speak:text                   3        0.300      100.0        200.0        -
 tts:start                    1        6.100     6100.0       6100.0        -
+jni:pcm_copy               214        4.100       19.2        120.0     0.44
+audio:queue_push           214        1.900        8.9        260.0        -
+speak:text                   3        0.300      100.0        200.0        -
 ```
 
-What each row is:
+What each row is (count, total, average and worst sample per row):
 
-- `load:voice` — opening the voice (parsing the pack). Once per voice per process.
-- `speak:first_pcm` — engine call start to the first PCM block reaching Kotlin: frontend plus
-  warm-up, the closest thing to "time before sound".
-- `speak:call` — the engine call itself, wall clock, including the time it spends blocked on the
-  audio queue (compare with `audio:queue_push` to see the split).
-- `speak:text` — decoding the text argument into UTF-8/CP1252.
+- `load:voice` — opening the voice (parsing the pack). Only paid by a request that had to open it;
+  the worker keeps voices open, so most requests show 0 or no row at all.
+- `speak:text` — decoding the text argument into UTF-8/CP1252, once per chunk.
+- `speak:first_pcm` — engine call start to the first PCM block reaching the sink: frontend plus
+  warm-up, the closest thing to "time before sound", once per chunk.
+- `speak:call` — the engine call itself, wall clock, once per chunk. It contains
+  `jni:pcm_copy` and `audio:queue_push`, and includes the time it spends blocked on a full queue,
+  so compare it with `audio:queue_push` to see how much is synthesis and how much is the engine
+  running ahead of playback.
 - `jni:pcm_copy` — `NewByteArray` plus the sample copy into the JVM (Mbytes shows throughput).
-- `audio:queue_push` — the sink call, i.e. the producer side of the Kotlin queue; it blocks when
-  the queue is full.
-- `audio:pull` — the consumer side: binder round trip plus the copy out of that queue, including
-  the wait for the first audio.
-- `audio:deliver` — `callback.audioAvailable`, i.e. the platform's audio buffer; large values here
-  mean the synthesizer is running ahead of playback.
-- `tts:start` / `tts:request` — `callback.start` and the whole `onSynthesizeText`.
+- `audio:queue_push` — the sink call, the producer side of the Kotlin queue; it blocks when the
+  queue is full.
+- `audio:pull` — the consumer side in the service process: binder round trip plus the copy out of
+  the queue, including the wait for the first audio.
+- `audio:deliver` — `callback.audioAvailable`, i.e. handing samples to the platform; large values
+  here mean the platform is not taking samples as fast as we produce them.
+- `tts:start` — `callback.start`, once per request.
 
-Profiling builds are slower than release ones and log per utterance, so use them for attribution,
+Rows nest, so do not add them up: `speak:call` already contains `jni:pcm_copy` and
+`audio:queue_push`, and `audio:pull`/`audio:deliver`/`tts:start` happen outside it. Read the table
+as "which row is biggest", then compare `speak:call` with `audio:queue_push` before concluding the
+engine is slow.
+
+Profiling builds are slower than release ones and print per request, so use them for attribution,
 not for measuring absolute throughput.
 
 ## Gotchas

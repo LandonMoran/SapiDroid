@@ -90,9 +90,6 @@ Java_org_sapidroid_tts_NativeZira_speak(JNIEnv *env, jclass clazz, jlong h, jstr
     if (rc < 0) {
         __android_log_print(4, "SapiDroidNative", "speak failed rc=%d", rc);
     }
-#if PROF_ON
-    prof_dump("utterance");
-#endif
     return stream.failed ? -1 : rc;
 }
 
@@ -129,6 +126,29 @@ Java_org_sapidroid_tts_NativeProfile_reset(JNIEnv *env, jclass clazz) {
     (void)env;
     (void)clazz;
     prof_reset();
+}
+
+/* Take-and-clear: the engine process hands one request's rows to the service process, which owns
+ * the table that gets printed. */
+JNIEXPORT jstring JNICALL
+Java_org_sapidroid_tts_NativeProfile_take(JNIEnv *env, jclass clazz) {
+    char buf[4096];
+    (void)clazz;
+    if (prof_snapshot(buf, (int)sizeof buf) <= 0) return (*env)->NewStringUTF(env, "");
+    return (*env)->NewStringUTF(env, buf);
+}
+
+JNIEXPORT void JNICALL
+Java_org_sapidroid_tts_NativeProfile_merge(JNIEnv *env, jclass clazz, jstring name, jlong total_ns,
+                                           jlong count, jlong max_ns, jlong bytes) {
+    char buf[64];
+    jsize len;
+    (void)clazz;
+    if (!name) return;
+    len = (*env)->GetStringLength(env, name);
+    if (len < 0 || len >= (jsize)sizeof buf) return;
+    (*env)->GetStringUTFRegion(env, name, 0, len, buf);
+    prof_merge(buf, (long long)total_ns, (long long)count, (long long)max_ns, (long long)bytes);
 }
 
 JNIEXPORT void JNICALL

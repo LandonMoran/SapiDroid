@@ -17,6 +17,10 @@ void prof_add_ns(const char *name, long long ns);      /* accumulate one sample 
 void prof_count_bytes(const char *name, long long bytes);
 void prof_dump(const char *tag);                      /* ranked table to logcat/stdout */
 void prof_reset(void);
+/* Serialises the table as "name,total_ns,count,max_ns,bytes;..." and clears it, so the engine
+ * process can hand one request's numbers to the service process that prints the report. */
+int prof_snapshot(char *buf, int cap);
+void prof_merge(const char *name, long long total_ns, long long count, long long max_ns, long long bytes);
 void prof_mark_speak_start(void);                     /* start of one engine speak call */
 void prof_first_block(void);                          /* first PCM block of that call, once */
 

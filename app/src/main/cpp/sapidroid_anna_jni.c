@@ -83,9 +83,6 @@ Java_org_sapidroid_tts_NativeAnna_speak(JNIEnv *env, jclass clazz, jlong h, jstr
     if (rc < 0) {
         __android_log_print(4, "SapiDroidNative", "anna speak failed rc=%d", rc);
     }
-#if PROF_ON
-    prof_dump("utterance");
-#endif
     return stream.failed ? -1 : rc;
 }
 

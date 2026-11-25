@@ -319,6 +319,9 @@ class SapiDroidWorkerService : Service() {
             }
             if (ok) "" else openError.ifEmpty { "voice data missing" }
         }
+
+        /** Profiling builds only: this process's rows for the request that just finished. */
+        override fun profileTake(): String = NativeProfile.take() ?: ""
     }
 
     override fun onCreate() {

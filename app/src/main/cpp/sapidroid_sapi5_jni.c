@@ -97,9 +97,6 @@ Java_org_sapidroid_tts_NativeSapi5_speak(JNIEnv *env, jclass clazz, jlong h, jst
     if (rc < 0) {
         __android_log_print(4, "SapiDroidSapi5", "speak failed rc=%d", rc);
     }
-#if PROF_ON
-    prof_dump("utterance");
-#endif
     return stream.failed ? -1 : rc;
 }
 

@@ -41,4 +41,10 @@ interface IZiraWorker {
 
     /** Empty when the voice data is present, otherwise why it is not. */
     String probe(String voice);
+
+    /**
+     * Profiling builds only: this process's timing rows for the request that just finished, as
+     * "name,totalNs,count,maxNs,bytes;...", and clears them.  Empty when profiling is off.
+     */
+    String profileTake();
 }

@@ -198,6 +198,8 @@ class SapiDroidService : TextToSpeechService() {
             return
         }
         stopped.set(false)
+        // One table per request: start it empty, print it in the finally below.
+        Prof.reset()
         try {
             synthesize(request, callback)
         } catch (t: Throwable) {
@@ -308,16 +310,24 @@ class SapiDroidService : TextToSpeechService() {
     ): Boolean {
         var worker = startWorker
         var replaced = false
-        while (true) {
-            try {
-                return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered)
-            } catch (e: WorkerGone) {
-                if (!mayRetryWorker(replaced, stopped.get(), delivered.get())) return false
-                replaced = true
-                Log.w(TAG, "replacing engine worker: ${e.message}")
-                worker = SapiDroidWorkers.replace(this, worker)
-                currentWorker = worker
+        // Start each chunk from an empty engine-side table (a no-op unless the build profiled).
+        Prof.discardWorker(worker)
+        try {
+            while (true) {
+                try {
+                    return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered)
+                } catch (e: WorkerGone) {
+                    if (!mayRetryWorker(replaced, stopped.get(), delivered.get())) return false
+                    replaced = true
+                    Log.w(TAG, "replacing engine worker: ${e.message}")
+                    worker = SapiDroidWorkers.replace(this, worker)
+                    currentWorker = worker
+                }
             }
+        } finally {
+            // Pulls the engine process's rows for this request into this process's table; a no-op
+            // unless the build profiled.
+            Prof.mergeWorker(worker)
         }
     }
 

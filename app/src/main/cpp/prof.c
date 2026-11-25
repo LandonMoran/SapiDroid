@@ -88,6 +88,40 @@ void prof_count_bytes(const char *name, long long bytes)
     unlock_rows();
 }
 
+/* "name,total_ns,count,max_ns,bytes;..." for one request, then clears the table. */
+int prof_snapshot(char *buf, int cap)
+{
+    int i, used = 0;
+    if (!buf || cap <= 1) return 0;
+    buf[0] = 0;
+    lock_rows();
+    for (i = 0; i < nrows; i++) {
+        int n = snprintf(buf + used, (size_t)(cap - used), "%s%s,%lld,%lld,%lld,%lld", i ? ";" : "",
+                         rows[i].name, rows[i].total_ns, rows[i].count, rows[i].max_ns, rows[i].bytes);
+        if (n < 0 || n >= cap - used) break;
+        used += n;
+    }
+    nrows = 0;
+    unlock_rows();
+    return used;
+}
+
+/* Folds another process's row (already aggregated) into this table. */
+void prof_merge(const char *name, long long total_ns, long long count, long long max_ns, long long bytes)
+{
+    prof_row *r;
+    if (!name) return;
+    lock_rows();
+    r = row_for(name);
+    if (r) {
+        r->total_ns += total_ns;
+        r->count += count;
+        r->bytes += bytes;
+        if (max_ns > r->max_ns) r->max_ns = max_ns;
+    }
+    unlock_rows();
+}
+
 void prof_mark_speak_start(void)
 {
     speak_start_ns = prof_now_ns();
@@ -189,5 +223,19 @@ void prof_dump(const char *tag) { (void)tag; }
 void prof_reset(void) { }
 void prof_mark_speak_start(void) { }
 void prof_first_block(void) { }
+int prof_snapshot(char *buf, int cap)
+{
+    (void)cap;
+    if (buf && cap > 0) buf[0] = 0;
+    return 0;
+}
+void prof_merge(const char *name, long long total_ns, long long count, long long max_ns, long long bytes)
+{
+    (void)name;
+    (void)total_ns;
+    (void)count;
+    (void)max_ns;
+    (void)bytes;
+}
 
 #endif
