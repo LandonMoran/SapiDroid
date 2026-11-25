@@ -16,6 +16,7 @@ long long prof_now_ns(void);
 void prof_add_ns(const char *name, long long ns);      /* accumulate one sample */
 void prof_count_bytes(const char *name, long long bytes);
 void prof_dump(const char *tag);                      /* ranked table to logcat/stdout */
+int prof_table(char *buf, int cap, const char *tag);  /* the same table as text, for export */
 void prof_reset(void);
 /* Serialises the table as "name,total_ns,count,max_ns,bytes;..." and clears it, so the engine
  * process can hand one request's numbers to the service process that prints the report. */

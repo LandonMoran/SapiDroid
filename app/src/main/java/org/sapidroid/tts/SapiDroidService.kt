@@ -36,6 +36,8 @@ class SapiDroidService : TextToSpeechService() {
 
     @Volatile private var currentWorker: IZiraWorker? = null
     @Volatile private var currentRequest: Int = -1
+    /** Labels the request in the profile table: its voice and engine. */
+    @Volatile private var profileTag: String = "request"
     private val fallbackDelegate = lazy { FallbackSpeech(this, stopped) }
     private val fallback by fallbackDelegate
     // A voice's output rate never changes, so remember it after the first
@@ -198,7 +200,8 @@ class SapiDroidService : TextToSpeechService() {
             return
         }
         stopped.set(false)
-        // One table per request: start it empty, print it in the finally below.
+        // One table per request: start it empty, record it in the finally below.
+        profileTag = "request"
         Prof.reset()
         try {
             synthesize(request, callback)
@@ -210,8 +213,8 @@ class SapiDroidService : TextToSpeechService() {
                 Log.e(TAG, "callback.error failed", t2)
             }
         } finally {
-            // Profiling builds print one ranked table per request (no-op otherwise).
-            Prof.dump("request")
+            // Profiling builds log one ranked table per request, and keep it for export.
+            Prof.record(this, profileTag)
         }
     }
 
@@ -238,6 +241,8 @@ class SapiDroidService : TextToSpeechService() {
             return
         }
         val voice = info.label
+        // Names the request in the profile table, so one export can be read per engine.
+        profileTag = "voice=$voice engine=${info.engine}"
 
         if (Log.isLoggable(TAG, Log.DEBUG)) {
             Log.d(TAG, "synth start voice=$voice requested=${request.voiceName} " +

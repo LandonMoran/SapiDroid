@@ -106,19 +106,20 @@ Java_org_sapidroid_tts_NativeProfile_addNs(JNIEnv *env, jclass clazz, jstring na
     prof_add_ns(buf, (long long)ns);
 }
 
-JNIEXPORT void JNICALL
-Java_org_sapidroid_tts_NativeProfile_dump(JNIEnv *env, jclass clazz, jstring tag) {
-    char buf[64];
+/* The request's table as text: the service writes it to logcat and to the file it can export. */
+JNIEXPORT jstring JNICALL
+Java_org_sapidroid_tts_NativeProfile_table(JNIEnv *env, jclass clazz, jstring tag) {
+    char table[8192];
+    char name[64];
     jsize len;
     (void)clazz;
-    if (!tag) {
-        prof_dump("utterance");
-        return;
+    name[0] = 0;
+    if (tag) {
+        len = (*env)->GetStringLength(env, tag);
+        if (len > 0 && len < (jsize)sizeof name) (*env)->GetStringUTFRegion(env, tag, 0, len, name);
     }
-    len = (*env)->GetStringLength(env, tag);
-    if (len < 0 || len >= (jsize)sizeof buf) return;
-    (*env)->GetStringUTFRegion(env, tag, 0, len, buf);
-    prof_dump(buf);
+    if (prof_table(table, (int)sizeof table, name) <= 0) return (*env)->NewStringUTF(env, "");
+    return (*env)->NewStringUTF(env, table);
 }
 
 JNIEXPORT void JNICALL

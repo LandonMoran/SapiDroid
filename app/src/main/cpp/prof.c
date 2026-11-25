@@ -158,12 +158,16 @@ static void emit(const char *line)
 #endif
 }
 
-void prof_dump(const char *tag)
+/* The one formatter: a ranked table as text, so logcat, the host tests and the exported file all
+ * say the same thing. */
+static int render_table(char *buf, int cap, const char *tag)
 {
     int order[PROF_MAX_ROWS];
-    int n, i, j;
+    int n, i, j, used = 0;
     char line[256];
 
+    if (!buf || cap <= 1) return 0;
+    buf[0] = 0;
     lock_rows();
     n = nrows;
     for (i = 0; i < n; i++) order[i] = i;
@@ -173,28 +177,46 @@ void prof_dump(const char *tag)
         for (j = i - 1; j >= 0 && rows[order[j]].total_ns < rows[v].total_ns; j--) order[j + 1] = order[j];
         order[j + 1] = v;
     }
+#define APPEND_LINE(...)                                                                   \
+    do {                                                                                   \
+        int wrote_ = snprintf(line, sizeof line, __VA_ARGS__);                             \
+        if (wrote_ < 0 || wrote_ >= (int)sizeof line) break;                               \
+        if (used + wrote_ + 2 > cap) break;                                                \
+        memcpy(buf + used, line, (size_t)wrote_);                                          \
+        used += wrote_;                                                                    \
+        buf[used++] = '\n';                                                                \
+        buf[used] = 0;                                                                     \
+    } while (0)
+
     dump_seq++;
-    snprintf(line, sizeof line, "=== profile %s #%d (%d points, ms of accumulated time)", tag ? tag : "",
-             dump_seq, n);
-    emit(line);
-    snprintf(line, sizeof line, "%-22s %7s %11s %10s %10s %9s", "point", "count", "total ms", "avg us",
-             "max us", "Mbytes");
-    emit(line);
+    APPEND_LINE("=== profile %s #%d (%d points, ms of accumulated time)", tag ? tag : "", dump_seq, n);
+    APPEND_LINE("%-22s %7s %11s %10s %10s %9s", "point", "count", "total ms", "avg us", "max us", "Mbytes");
     for (i = 0; i < n; i++) {
         const prof_row *r = &rows[order[i]];
         double total_ms = (double)r->total_ns / 1e6;
         double avg_us = r->count ? (double)r->total_ns / (double)r->count / 1e3 : 0.0;
         double max_us = (double)r->max_ns / 1e3;
         if (r->bytes) {
-            snprintf(line, sizeof line, "%-22s %7lld %11.3f %10.1f %10.1f %9.2f", r->name, r->count, total_ms,
-                     avg_us, max_us, (double)r->bytes / (1024.0 * 1024.0));
+            APPEND_LINE("%-22s %7lld %11.3f %10.1f %10.1f %9.2f", r->name, r->count, total_ms, avg_us, max_us,
+                        (double)r->bytes / (1024.0 * 1024.0));
         } else {
-            snprintf(line, sizeof line, "%-22s %7lld %11.3f %10.1f %10.1f %9s", r->name, r->count, total_ms,
-                     avg_us, max_us, "-");
+            APPEND_LINE("%-22s %7lld %11.3f %10.1f %10.1f %9s", r->name, r->count, total_ms, avg_us, max_us, "-");
         }
-        emit(line);
     }
+#undef APPEND_LINE
     unlock_rows();
+    return used;
+}
+
+int prof_table(char *buf, int cap, const char *tag)
+{
+    return render_table(buf, cap, tag);
+}
+
+void prof_dump(const char *tag)
+{
+    char all[8192];
+    if (render_table(all, (int)sizeof all, tag) > 0) emit(all);
 }
 
 void prof_reset(void)
@@ -220,6 +242,13 @@ void prof_count_bytes(const char *name, long long bytes)
     (void)bytes;
 }
 void prof_dump(const char *tag) { (void)tag; }
+int prof_table(char *buf, int cap, const char *tag)
+{
+    (void)tag;
+    (void)cap;
+    if (buf && cap > 0) buf[0] = 0;
+    return 0;
+}
 void prof_reset(void) { }
 void prof_mark_speak_start(void) { }
 void prof_first_block(void) { }

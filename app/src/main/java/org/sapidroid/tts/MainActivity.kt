@@ -74,6 +74,11 @@ class MainActivity : Activity() {
 
 
         findViewById<Button>(R.id.speakButton).setOnClickListener { speakTest() }
+        val exportProfile = findViewById<Button>(R.id.exportProfileButton)
+        if (BuildConfig.PROFILE) {
+            exportProfile.visibility = View.VISIBLE
+            exportProfile.setOnClickListener { exportProfileLog() }
+        }
         findViewById<Button>(R.id.getSapi5Button).setOnClickListener { confirmSapi5Download() }
         findViewById<Button>(R.id.getAnnaButton).setOnClickListener { confirmAnnaDownload() }
         findViewById<Button>(R.id.oneCoreVoicesButton).setOnClickListener {
@@ -417,6 +422,27 @@ class MainActivity : Activity() {
                 runOnUiThread { resultText.text = "Local extraction failed: ${t.message}" }
             }
         }.apply { name = "sapidroid-local-extract" }.start()
+    }
+
+    /**
+     * Profiling builds only: hands the recorded per-request tables to whatever the user picks, so
+     * the numbers can leave the device without a cable. The same text is at
+     * `profile/profiling.txt` in the app's external files folder.
+     */
+    private fun exportProfileLog() {
+        val text = Prof.exportText(this)
+        if (text.isEmpty()) {
+            showResult("No profile recorded yet: speak something first.")
+            return
+        }
+        val share = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_SUBJECT, "SapiDroid profile")
+            putExtra(android.content.Intent.EXTRA_TEXT, text)
+        }
+        startActivity(android.content.Intent.createChooser(share, "Export profile log"))
+        showResult("Profile log: ${text.lineSequence().count()} lines, ${text.length} bytes\n" +
+            (Prof.logFile(this)?.absolutePath ?: ""))
     }
 
     private fun speakTest() {

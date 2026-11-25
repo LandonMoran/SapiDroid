@@ -233,12 +233,31 @@ Kernel timings come from `bench/run.sh`; the user-visible milliseconds come from
 ```
 ./gradlew assembleDebug -Pprofile
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb logcat -s SapiDroidProf
 ```
 
 `-Pprofile` defines `SAPIDROID_PROFILE` for the native build (see `app/src/main/cpp/CMakeLists.txt`)
 and sets `BuildConfig.PROFILE` for Kotlin. Without it every instrumentation site compiles to
 nothing, so release builds are untouched.
+
+Profiling needs real voice data on the device. A bare emulator, like every CI runner (see **CI**
+below), has none: `load:voice` fails there with "voice data missing" and there is nothing to
+measure. Use the phone that already has the voices, or an emulator into which the packs were
+installed through the app's own download buttons.
+
+Speak a few sentences with each voice you care about, then take the numbers off the device:
+
+- in the app: **Export profile log** (profile builds only) opens the share sheet with the whole log;
+- over USB: `adb pull /sdcard/Android/data/org.sapidroid.tts/files/profile/profiling.txt`;
+- live: `adb logcat -s SapiDroidProf`.
+
+The file is those tables appended in order, one per request, each headed by the voice and engine
+that produced it:
+
+```
+=== profile voice=David engine=ONECORE #7 (9 points, ms of accumulated time)
+```
+
+It rotates to `profiling.txt.1` at 1 MB so a long session does not fill storage.
 
 There is exactly one table per request: `onSynthesizeText` empties it on entry and prints it when
 the request ends, so counts and totals describe that request alone. The engine runs in its own

@@ -81,6 +81,10 @@ jobs:
         with:
           name: sapidroid-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      # The profiler is opt-in, so the normal build never compiles its Kotlin, its JNI entry
+      # points or its AIDL method. Build the profiling variant too, so they cannot rot.
+      - name: Build the profiling APK
+        run: ./gradlew :app:assembleDebug -Pprofile --console=plain
 
   fallback-on-emulator:
     runs-on: ubuntu-latest
