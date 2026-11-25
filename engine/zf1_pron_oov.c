@@ -358,11 +358,11 @@ static int part_pron(zf1_pron *p, const zf_char *s, int n, int spell, uint16_t *
 }
 
 /* append one output piece of the compound network (FUN_1800ccb60 semantics as implemented by fork A) */
-static void cpn_piece(zf1_pron *p, const zf_char *b, int len, uint16_t *part, uint16_t *out, int cap)
+static int cpn_piece(zf1_pron *p, const zf_char *b, int len, uint16_t *part, uint16_t *out, int cap)
 {
     static const zf_char spl[] = {'/', 'S', 'P', 'E', 'L', 'L'};
     int spell = 0;
-    if (len <= 0) return;
+    if (len <= 0) return 0;
     if (len > 6 && !memcmp(b + len - 6, spl, sizeof spl)) { len -= 6; spell = 1; }
     if (len > 16 && b[0] == '[' && b[len - 15] == ']' && b[len - 14] == '/') {
         /* "[ph+ph]/PRONUNCIATION": explicit phone names */
@@ -373,15 +373,17 @@ static void cpn_piece(zf1_pron *p, const zf_char *b, int len, uint16_t *part, ui
         zf1_phonestr_to_ids(p->ps, nm, part, 0x180);
     } else {
         if (len == 1 && (zf1_iswupper(b[0]) || zf1_iswlower(b[0]))) spell = 1;   /* FUN_18005898c */
-        if (part_pron(p, b, len, spell, part, 0x180) < 0) return;
+        int rc = part_pron(p, b, len, spell, part, 0x180);
+        if (rc != 0) return rc;
     }
     if (part[0]) {
         int k = u16len(out), m = u16len(part), i2;
-        if (k) { if (k + 1 >= cap) return; out[k++] = p->sylmark; }
-        if (k + m + 1 > cap) return;
+        if (k + (k != 0) + m + 1 > cap) return 1;
+        if (k) out[k++] = p->sylmark;
         for (i2 = 0; i2 < m; i2++) out[k + i2] = part[i2];
         out[k + m] = 0;
     }
+    return 0;
 }
 
 /* ---- COMPOUNDPRON (FUN_1800cca70 -> FUN_1800cc510): the word is walked from position 0: the compound network
@@ -410,7 +412,8 @@ int zf1_pron_compound(zf1_pron *p, const zf_char *text, uint16_t *out, int cap)
                 if (!*q) break;
                 b = q;
                 while (*q && *q != ' ') q++;
-                cpn_piece(p, b, (int)(q - b), part, out, cap);
+                int rc = cpn_piece(p, b, (int)(q - b), part, out, cap);
+                if (rc != 0) { free(txt); return rc; }
             }
             free(txt);
             pos += plen;
@@ -420,15 +423,16 @@ int zf1_pron_compound(zf1_pron *p, const zf_char *text, uint16_t *out, int cap)
             if (pos == 0 && nxt >= n) return 1;
             if (nxt > n) nxt = n;
             len = nxt - pos;
-            if (part_pron(p, text + pos, len,
-                          len == 1 && (zf1_iswupper(text[pos]) || zf1_iswlower(text[pos])),
-                          part, 0x180) >= 0 && part[0]) {
+            int rc = part_pron(p, text + pos, len,
+                               len == 1 && (zf1_iswupper(text[pos]) || zf1_iswlower(text[pos])),
+                               part, 0x180);
+            if (rc != 0) return rc;
+            if (part[0]) {
                 int k = u16len(out), m = u16len(part), i2;
-                if (k && k + 1 < cap) out[k++] = p->sylmark;
-                if (k + m + 1 <= cap) {
-                    for (i2 = 0; i2 < m; i2++) out[k + i2] = part[i2];
-                    out[k + m] = 0;
-                }
+                if (k + (k != 0) + m + 1 > cap) return 1;
+                if (k) out[k++] = p->sylmark;
+                for (i2 = 0; i2 < m; i2++) out[k + i2] = part[i2];
+                out[k + m] = 0;
             }
             pos = nxt;
         }

@@ -480,7 +480,7 @@ int zf1_pron_pass2(zf1_pron *p, zf_wordlist *wl)
             }
             r = zf1_pron_lts_word(p, text, buf, 0x180, &src);
         }
-        if (r < 0) continue;
+        if (r < 0) return r;
         zf1_word_setpron(w, buf, src, 0);
         if (w->i278 != 8) {
             zf1_pron_spell(p, text, sp, 0x180, 0);
@@ -642,8 +642,10 @@ void zf1_pron_finish(zf1_pron *p, zf_wordlist *wl)
 
 int zf1_pron_sentence(zf1_pron *p, zf_wordlist *wl)
 {
-    zf1_pron_pass1(p, wl);
-    zf1_pron_pass2(p, wl);
+    int rc = zf1_pron_pass1(p, wl);
+    if (rc < 0) return rc;
+    rc = zf1_pron_pass2(p, wl);
+    if (rc < 0) return rc;
     if (p->poly) p->poly(p->posobj, wl);
     zf1_pron_pass3(p, wl);
     zf1_pron_pass4(p, wl);

@@ -49,6 +49,12 @@ jobs:
           cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zf1_enum_host_test.c engine/zf1_ana.c engine/zf1_util.c \
             -Wl,--gc-sections -o "$RUNNER_TEMP/zf1_enum_host_test"
           "$RUNNER_TEMP/zf1_enum_host_test"
+          cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zf1_compound_host_test.c \
+            -Wl,--gc-sections -o "$RUNNER_TEMP/zf1_compound_host_test"
+          "$RUNNER_TEMP/zf1_compound_host_test"
+          cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zf1_pron_error_host_test.c engine/*.c \
+            -Wl,--gc-sections,--wrap=malloc -lm -o "$RUNNER_TEMP/zf1_pron_error_host_test"
+          "$RUNNER_TEMP/zf1_pron_error_host_test"
           cc -std=c99 -O2 -pthread -ffunction-sections -fdata-sections engine/tests/zf2_word_position_host_test.c engine/zf2_feat.c engine/zf2_tree.c engine/zf2_units.c engine/zb_apm.c \
             -Wl,--gc-sections,--wrap=malloc,--wrap=calloc -lm -o "$RUNNER_TEMP/zf2_word_position_host_test"
           "$RUNNER_TEMP/zf2_word_position_host_test"
