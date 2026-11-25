@@ -23,15 +23,18 @@ class WorkerDrainTest {
         @Suppress("UNCHECKED_CAST")
         val queue = queueField.get(service) as ArrayDeque<ByteArray>
         queue.add(byteArrayOf(1, 2, 3, 4))
+        queue.add(byteArrayOf(5, 6))
         val bytesField = SapiDroidWorkerService::class.java.getDeclaredField("pendingBytes")
         bytesField.isAccessible = true
-        bytesField.setInt(service, 4)
+        bytesField.setInt(service, 6)
 
         val worker = IZiraWorker.Stub.asInterface(service.onBind(Intent()))
         assertFalse(worker.finished(0))
         assertArrayEquals(byteArrayOf(1, 2), worker.pull(0, 2, 0))
         assertFalse(worker.finished(0))
         assertArrayEquals(byteArrayOf(3, 4), worker.pull(0, 2, 0))
+        assertFalse(worker.finished(0))
+        assertArrayEquals(byteArrayOf(5, 6), worker.pull(0, 2, 0))
         assertTrue(worker.finished(0))
     }
 

@@ -190,7 +190,8 @@ class SapiDroidWorkerService : Service() {
                     val buf = pending.peekFirst()
                     if (buf != null) {
                         val n = minOf(limit, buf.size - pendingOffset)
-                        val out = buf.copyOfRange(pendingOffset, pendingOffset + n)
+                        val out = if (pendingOffset == 0 && n == buf.size) buf
+                            else buf.copyOfRange(pendingOffset, pendingOffset + n)
                         pendingOffset += n
                         pendingBytes -= n
                         if (pendingOffset == buf.size) {
