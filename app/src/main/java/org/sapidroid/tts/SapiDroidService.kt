@@ -31,7 +31,7 @@ class SapiDroidService : TextToSpeechService() {
 
     @Volatile private var currentWorker: IZiraWorker? = null
     @Volatile private var currentRequest: Int = -1
-    private lateinit var fallback: FallbackSpeech
+    private val fallback by lazy { FallbackSpeech(this, stopped) }
     // A voice's output rate never changes, so remember it after the first
     // lookup and skip a binder round trip on every later utterance.
     private val rateCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
@@ -42,7 +42,6 @@ class SapiDroidService : TextToSpeechService() {
 
     override fun onCreate() {
         super.onCreate()
-        fallback = FallbackSpeech(this, stopped)
         Thread {
             try {
                 // One-time carry-over of voice data into device-protected
