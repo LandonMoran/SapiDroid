@@ -2,6 +2,7 @@
 #include <assert.h>
 
 static int calls, stop_audio, expected_events, events;
+static int word_pos, word_len = 3, expected_pos, expected_len = 3;
 static int16_t received[4];
 static const char *const *expected_runs;
 static int run_index;
@@ -20,7 +21,7 @@ int sam_tts_speak_ex(sam_tts *t, const char *text, const sam_speak_opts *opts, s
     assert((opts->mark_cb != NULL) == expected_events);
     if (expected_runs) assert(strcmp(text, expected_runs[run_index++]) == 0);
     if (opts->mark_cb) {
-        sam_mark mark = {1, 0, 3, 0, 3, 0};
+        sam_mark mark = {1, word_pos, word_len, 0, 3, 0};
         opts->mark_cb(opts->user, &mark);
     }
     const int16_t pcm[] = { -100, -1, 0, 100 };
@@ -37,7 +38,7 @@ static int audio(const int16_t *pcm, size_t n, void *user) {
 static void event(const sam_event *ev, void *user) {
     (void)user;
     if (ev->type == SAM_EV_WORD) {
-        assert(ev->text_pos == 0 && ev->text_len == 3);
+        assert(ev->text_pos == expected_pos && ev->text_len == expected_len);
         events++;
     }
 }
@@ -72,6 +73,10 @@ int main(void) {
     expected_events = 1;
     assert(sam_tts_speak(&t, "abc", 0, &cb) == 0);
     assert(events == 1 && calls == 6 && memcmp(received, pcm, sizeof pcm) == 0);
+    word_pos = 1;
+    expected_pos = 2;
+    assert(sam_tts_speak(&t, "\xc3\xa9" "abc", 0, &cb) == 0);
+    assert(events == 2);
     cb.event = NULL;
     expected_events = 0;
     stop_audio = 1;
