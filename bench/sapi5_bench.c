@@ -1,6 +1,6 @@
-/* SAPI 5 (Sam/Mike/Mary) kernel benchmark: the all-pole filter that runs over every output sample,
- * the excitation's inverse FFT and the period fitter. Compiled against this repository's
- * app/src/main/cpp/sapi5 and against upstream ms-sam-mike-mary-decomp (SRC_DIR). */
+/* SAPI 5 (Sam/Mike/Mary) kernel benchmark: lsf_to_lpc, the excitation's inverse FFT, the period
+ * fitter and the all-pole filter that runs over every output sample. Compiled against this
+ * repository and against the original SapiDroid checkout by bench/run.sh. */
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -11,10 +11,10 @@
 /* sam.c is force-included by bench/run.sh with -include. */
 #include "sam.h"
 
-/* out-of-line calls, as in the app (see sapi4_bench.c) */
 static void (*volatile call_lpc)(sam_synth *, const float *, float *, int, float) = lpc_filter;
 static void (*volatile call_ifft)(float *, int, int, const float *) = ifft_split_radix;
 static void (*volatile call_fit)(const float *, int, float *, int, const float *, int) = fit_period;
+static void (*volatile call_lsf2lpc)(float *, int, float *) = lsf_to_lpc;
 
 static uint32_t rng_state = 0x9e3779b9u;
 static uint32_t rnd(void)
@@ -115,10 +115,28 @@ static void bench_fit(void)
     report("s5.fitperiod", t1 - t0, R, digest(dst, sizeof dst));
 }
 
+static void bench_lsf(void)
+{
+    enum { ORDER = 16, R = 200000 };
+    float lsf[ORDER], a[ORDER + 1], base[ORDER];
+    int i, r;
+    for (i = 0; i < ORDER; i++) base[i] = (float)(i + 1) / (float)(ORDER + 2);
+    double t0, t1;
+    t0 = now();
+    for (r = 0; r < R; r++) {
+        memcpy(lsf, base, sizeof lsf);
+        lsf[0] += (float)r * 1e-9f;
+        call_lsf2lpc(lsf, ORDER, a);
+    }
+    t1 = now();
+    report("s5.lsf_to_lpc", t1 - t0, R, digest(a, sizeof a));
+}
+
 int main(void)
 {
     bench_lpc();
     bench_ifft();
     bench_fit();
+    bench_lsf();
     return 0;
 }

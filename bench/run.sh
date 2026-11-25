@@ -1,76 +1,78 @@
 #!/bin/sh
-# Build the engine kernels in this repository and the same kernels from the four upstream
-# reconstructions, run them on identical deterministic inputs, and report
-#   * whether the output is bit-identical (last column), and
-#   * the time difference, in ns per sample (or per call for the FFTs).
+# Benchmark every kernel of the four speech engines in this repository against the same kernels in
+# the original SapiDroid (devinprater/SapiDroid, the project this one is forked from), on identical
+# deterministic inputs, and report:
+#   * whether both produce bit-identical output (the last column), and
+#   * ns per sample (or per call for the transforms and one-shot kernels).
+#
+# Both trees are built with the same compiler, so the first two columns are the original's kernels at
+# the flags it shipped with (-O2) and at this repository's flags (-O3 -fno-math-errno); the third is
+# this repository. That separates "same code, different flags" from "different code".
 #
 # Usage: bench/run.sh
-#   UPSTREAM_DIR=<dir>   where the upstream checkouts go (cloned if missing)
-#   BENCH_OUT=<dir>      where the binaries and TSV results go
-#   CC=clang             compiler (default: cc)
-#
-# The clones and the binaries live outside the repository so nothing large is added to it.
+#   ORIG_DIR=<dir>     where the original SapiDroid checkout goes (cloned if missing)
+#   BENCH_OUT=<dir>    where the binaries and TSV results go (outside the repository by default)
+#   OURS_FLAGS=<opts>  override this repository's flags (the digests still have to match)
+#   CC=clang           compiler (default: cc)
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-UP=${UPSTREAM_DIR:-${TMPDIR:-/tmp}/sapidroid-upstream-$(id -u)}
+ORIG=${ORIG_DIR:-${TMPDIR:-/tmp}/sapidroid-orig-$(id -u)}
 OUT=${BENCH_OUT:-${TMPDIR:-/tmp}/sapidroid-bench-$(id -u)}
 CC=${CC:-cc}
 COMMON="-std=c99 -ffp-contract=off -fno-fast-math -fno-math-errno -D_DEFAULT_SOURCE"
+OURS_FLAGS=${OURS_FLAGS:--O3}
 
-if [ ! -d "$UP/s4" ] || [ ! -d "$UP/s5" ] || [ ! -d "$UP/anna" ] || [ ! -d "$UP/onecore" ]; then
-    echo "cloning upstream engines into $UP" >&2
-    mkdir -p "$UP"
-    [ -d "$UP/s4" ] || git clone --depth 1 -q https://github.com/Quinton1110/sapi4-decomp.git "$UP/s4" &
-    [ -d "$UP/s5" ] || git clone --depth 1 -q https://github.com/KamiKitsune420/ms-sam-mike-mary-decomp.git "$UP/s5" &
-    [ -d "$UP/anna" ] || git clone --depth 1 -q https://github.com/KamiKitsune420/ms-ana-decomp.git "$UP/anna" &
-    [ -d "$UP/onecore" ] || git clone --depth 1 -q https://github.com/KamiKitsune420/ms-david-zira-decomp.git "$UP/onecore" &
-    wait
+if [ ! -d "$ORIG/app/src/main/cpp" ]; then
+    echo "cloning the original SapiDroid into $ORIG" >&2
+    mkdir -p "$ORIG"
+    git clone --depth 1 -q https://github.com/devinprater/SapiDroid.git "$ORIG"
 fi
-
 mkdir -p "$OUT"
 
-# build <binary> <bench source> <kernel dir> <optimisation flags>
-# The kernel files are force-included, so the benchmark's calls and the file's static functions share
-# one translation unit exactly as they do inside the app. OURS_FLAGS overrides this repository's
-# flags so a flag can be tried without editing the script (the digests still have to match).
-build() {
-    name=$1
-    src=$2
-    dir=$3
-    opt=$4
-    case $src in
-    sapi4_bench.c)   incs="-include $dir/src/fft.c -include $dir/src/dsp.c" ;;
-    sapi5_bench.c)   incs="-include $dir/sam.c" ;;
-    anna_bench.c)    incs="-include $dir/anna_dec_wmav.c" ;;
-    onecore_bench.c) incs="-include $ROOT/bench/onecore_stub.c -include $ROOT/bench/onecore_wrap_float.c -include $ROOT/bench/onecore_wrap_int.c -include $ROOT/bench/onecore_wrap_sonic.c" ;;
-    esac
+# build_variant <prefix> <tree> <optimisation flags>
+# The kernel files are force-included: the benchmark's calls and the file's static functions have to
+# share one translation unit exactly as they do inside the app.
+build_variant() {
+    prefix=$1
+    tree=$2
+    opt=$3
+
+    d=$tree/app/src/main/cpp/sapi4
     # shellcheck disable=SC2086
-    $CC $COMMON $opt $incs -I"$dir" -I"$dir/src" -I"$dir/port" \
-        "$ROOT/bench/$src" -lm -o "$OUT/$name"
+    $CC $COMMON $opt -include "$d/src/fft.c" -include "$d/src/dsp.c" -include "$d/src/lpc.c" \
+        -I"$d/src" "$ROOT/bench/sapi4_bench.c" -lm -o "$OUT/s4_$prefix"
+
+    d=$tree/app/src/main/cpp/sapi5
+    # shellcheck disable=SC2086
+    $CC $COMMON $opt -include "$d/sam.c" -I"$d" "$ROOT/bench/sapi5_bench.c" -lm -o "$OUT/s5_$prefix"
+    # shellcheck disable=SC2086
+    $CC $COMMON $opt -include "$d/sam4fx.c" -I"$d" "$ROOT/bench/sapi5_fx_bench.c" -lm -o "$OUT/s5fx_$prefix"
+
+    d=$tree/app/src/main/cpp/anna
+    # shellcheck disable=SC2086
+    $CC $COMMON $opt -include "$d/anna_dec_wmav.c" -I"$d" "$ROOT/bench/anna_bench.c" -lm -o "$OUT/anna_$prefix"
+
+    d=$tree/engine
+    # shellcheck disable=SC2086
+    $CC $COMMON $opt -include "$ROOT/bench/onecore_stub.c" -include "$ROOT/bench/onecore_wrap_float.c" \
+        -include "$ROOT/bench/onecore_wrap_int.c" -include "$ROOT/bench/onecore_wrap_sonic.c" \
+        -I"$d" "$ROOT/bench/onecore_bench.c" -lm -o "$OUT/oc_$prefix"
 }
 
-# The four upstream engines build with -O2 (their Makefiles). SapiDroid ships -O3 and
-# -fno-math-errno, so the report separates "same compiler flags" from "what ships".
-for v in sapi4 sapi5 anna onecore; do
-    case $v in
-    sapi4)   src=sapi4_bench.c;   ours="$ROOT/app/src/main/cpp/sapi4"; up="$UP/s4" ;;
-    sapi5)   src=sapi5_bench.c;   ours="$ROOT/app/src/main/cpp/sapi5"; up="$UP/s5/src" ;;
-    anna)    src=anna_bench.c;    ours="$ROOT/app/src/main/cpp/anna"; up="$UP/anna/src" ;;
-    onecore) src=onecore_bench.c; ours="$ROOT/engine"; up="$UP/onecore/src" ;;
-    esac
-    build "${v}_ours"        "$src" "$ours" "${OURS_FLAGS:--O3}"
-    build "${v}_upstream_o3" "$src" "$up"   "-O3"
-    build "${v}_upstream_o2" "$src" "$up"   "-O2"
-done
+build_variant ours "$ROOT" "$OURS_FLAGS"
+build_variant orig_o3 "$ORIG" "-O3"
+build_variant orig_o2 "$ORIG" "-O2"
 
-rm -f "$OUT/ours.tsv" "$OUT/upstream_o3.tsv" "$OUT/upstream_o2.tsv"
-for v in sapi4 sapi5 anna onecore; do
-    for variant in ours upstream_o3 upstream_o2; do
-        for run in 1 2 3; do
-            "$OUT/${v}_${variant}" >> "$OUT/$variant.tsv"
+# The variants are interleaved inside each round: the clock on a shared machine drifts, and running
+# all of one variant and then all of another charges that drift to whichever ran second.
+rm -f "$OUT/ours.tsv" "$OUT/orig_o3.tsv" "$OUT/orig_o2.tsv"
+for run in 1 2 3 4 5 6 7; do
+    for prog in s4 s5 s5fx anna oc; do
+        for variant in ours orig_o3 orig_o2; do
+            "$OUT/${prog}_${variant}" >> "$OUT/$variant.tsv"
         done
     done
 done
 
-python3 "$ROOT/bench/report.py" "$OUT/ours.tsv" "$OUT/upstream_o3.tsv" "$OUT/upstream_o2.tsv"
+python3 "$ROOT/bench/report.py" "$OUT/ours.tsv" "$OUT/orig_o3.tsv" "$OUT/orig_o2.tsv"

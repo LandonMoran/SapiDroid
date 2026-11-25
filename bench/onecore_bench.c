@@ -19,6 +19,8 @@ static void (*volatile call_synth)(const float *, int, const float *, const floa
 static void (*volatile call_iexc)(ZbVoice *, const int32_t *, int, int, int, int32_t *) = iexcitation;
 static void (*volatile call_isynth)(ZbVoice *, const int32_t *, int, const int32_t *, const int32_t *, int, int, short *) =
     isynth;
+static void (*volatile call_scale_pcm)(short *, long, float) = zb_scale_pcm;
+static void (*volatile call_lsf_repair)(float *, int, int) = zb_lsf_repair;
 
 static uint32_t rng_state = 0x6d2b79f5u;
 static uint32_t rnd(void)
@@ -160,11 +162,47 @@ static void bench_sonic(void)
     report("onecore.sonic", t1 - t0, ops, digest(buf, sizeof buf));
 }
 
+static void bench_scale_pcm(void)
+{
+    enum { N = 22050, R = 300 };
+    short base[N], x[N];
+    int i, r;
+    for (i = 0; i < N; i++) base[i] = (short)((i * 37) % 20000 - 10000);
+    double t0, t1;
+    t0 = now();
+    for (r = 0; r < R; r++) {
+        memcpy(x, base, sizeof x);
+        call_scale_pcm(x, N, 0.9f + (float)r * 1e-9f);
+    }
+    t1 = now();
+    report("onecore.scale_pcm", t1 - t0, (double)N * R, digest(x, sizeof x));
+}
+
+static void bench_lsf_repair(void)
+{
+    enum { ROWS = 100, P = 24, R = 50000 };
+    float base[ROWS * P], lsf[ROWS * P];
+    int i, r;
+    for (i = 0; i < ROWS * P; i++) base[i] = (float)(i % P + 1) / (float)(P + 2);
+    double t0, t1;
+    t0 = now();
+    for (r = 0; r < R; r++) {
+        memcpy(lsf, base, sizeof lsf);
+        /* a few out-of-order rows so the sort and the refill run, as on damaged frames */
+        lsf[(r % ROWS) * P + 3] = lsf[(r % ROWS) * P + 3] * 0.5f;
+        call_lsf_repair(lsf, ROWS, P);
+    }
+    t1 = now();
+    report("onecore.lsf_repair", t1 - t0, (double)ROWS * R, digest(lsf, sizeof lsf));
+}
+
 int main(void)
 {
     bench_fir();
     bench_float();
     bench_int();
     bench_sonic();
+    bench_scale_pcm();
+    bench_lsf_repair();
     return 0;
 }
