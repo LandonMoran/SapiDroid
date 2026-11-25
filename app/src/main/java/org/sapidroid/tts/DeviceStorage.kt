@@ -24,6 +24,7 @@ object DeviceStorage {
     private const val KEY_DEFAULT_VOICE = "default_voice"
 
     private val VOICE_DIRS = arrayOf("voice", "anna", "sapi4", "sapi5")
+    @Volatile private var migrationComplete = false
 
     /**
      * A context whose filesDir, cacheDir and shared preferences live in
@@ -39,11 +40,20 @@ object DeviceStorage {
      * storage is sealed, so there is nothing readable to move) and after the
      * marker is set. Never throws; a deferred move just retries next launch.
      */
-    @Synchronized fun migrateIfNeeded(appContext: Context) {
+    fun migrateIfNeeded(appContext: Context) {
+        if (migrationComplete) return
+        synchronized(this) { migrateLocked(appContext) }
+    }
+
+    private fun migrateLocked(appContext: Context) {
+        if (migrationComplete) return
         try {
             val device = context(appContext)
             val prefs = device.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            if (prefs.getBoolean(KEY_MIGRATED, false)) return
+            if (prefs.getBoolean(KEY_MIGRATED, false)) {
+                migrationComplete = true
+                return
+            }
             val um = appContext.getSystemService(UserManager::class.java)
             if (um != null && !um.isUserUnlocked) return
             for (name in VOICE_DIRS) {
@@ -67,6 +77,7 @@ object DeviceStorage {
                 if (old != null) prefs.edit().putString(KEY_DEFAULT_VOICE, old).apply()
             }
             prefs.edit().putBoolean(KEY_MIGRATED, true).apply()
+            migrationComplete = true
         } catch (t: Throwable) {
             Log.w(TAG, "storage migration deferred", t)
         }

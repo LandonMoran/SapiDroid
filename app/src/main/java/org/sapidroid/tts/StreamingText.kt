@@ -1,10 +1,13 @@
 package org.sapidroid.tts
 
 internal object StreamingText {
-    fun split(text: String): List<String> {
+    inline fun forEachChunk(text: String, consume: (String) -> Boolean) {
         val trimmed = text.trim()
-        if (trimmed.length <= 350) return listOf(trimmed)
-        val out = mutableListOf<String>()
+        if (trimmed.length <= 350) {
+            consume(trimmed)
+            return
+        }
+        var emitted = false
         var start = 0
         var i = 0
         while (i < trimmed.length) {
@@ -14,7 +17,11 @@ internal object StreamingText {
             if ((endOfSentence || c == '\n') && i + 1 - start >= 20) {
                 var end = i + 1
                 while (end < trimmed.length && trimmed[end].isWhitespace()) end++
-                out.add(trimmed.substring(start, end).trim())
+                val chunk = trimmed.substring(start, end).trim()
+                if (chunk.isNotEmpty()) {
+                    emitted = true
+                    if (!consume(chunk)) return
+                }
                 start = end
                 i = end
                 continue
@@ -27,7 +34,11 @@ internal object StreamingText {
                     if (end < trimmed.length && Character.isHighSurrogate(trimmed[end - 1]) &&
                         Character.isLowSurrogate(trimmed[end])) end++
                 }
-                out.add(trimmed.substring(start, end).trim())
+                val chunk = trimmed.substring(start, end).trim()
+                if (chunk.isNotEmpty()) {
+                    emitted = true
+                    if (!consume(chunk)) return
+                }
                 while (end < trimmed.length && trimmed[end].isWhitespace()) end++
                 start = end
                 i = end
@@ -35,7 +46,13 @@ internal object StreamingText {
             }
             i++
         }
-        if (start < trimmed.length) out.add(trimmed.substring(start).trim())
-        return out.filter { it.isNotEmpty() }.ifEmpty { listOf(trimmed) }
+        if (start < trimmed.length) {
+            val chunk = trimmed.substring(start).trim()
+            if (chunk.isNotEmpty()) {
+                emitted = true
+                if (!consume(chunk)) return
+            }
+        }
+        if (!emitted) consume(trimmed)
     }
 }

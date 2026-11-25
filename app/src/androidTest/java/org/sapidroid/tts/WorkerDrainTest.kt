@@ -16,6 +16,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 @RunWith(AndroidJUnit4::class)
 class WorkerDrainTest {
     @Test
+    fun pullCoalescesAvailableBlocksAndPreservesPartialOffsets() {
+        val service = SapiDroidWorkerService()
+        val enqueue = SapiDroidWorkerService::class.java.getDeclaredMethod(
+            "enqueueAudio", Int::class.javaPrimitiveType, ByteArray::class.java
+        ).apply { isAccessible = true }
+        assertTrue(enqueue.invoke(service, 0, byteArrayOf(1, 2, 3, 4)) as Boolean)
+        assertTrue(enqueue.invoke(service, 0, byteArrayOf(5, 6)) as Boolean)
+        assertTrue(enqueue.invoke(service, 0, byteArrayOf(7, 8, 9)) as Boolean)
+        val worker = IZiraWorker.Stub.asInterface(service.onBind(Intent()))
+        assertArrayEquals(byteArrayOf(1, 2, 3), worker.pull(0, 3, 0))
+        assertArrayEquals(byteArrayOf(4, 5, 6, 7, 8), worker.pull(0, 5, 0))
+        assertFalse(worker.finished(0))
+        assertArrayEquals(byteArrayOf(9), worker.pull(0, 5, 0))
+        assertTrue(worker.finished(0))
+    }
+
+    @Test
     fun finishedWaitsUntilTheLastAudioHasBeenPulled() {
         val service = SapiDroidWorkerService()
         val queueField = SapiDroidWorkerService::class.java.getDeclaredField("pending")
