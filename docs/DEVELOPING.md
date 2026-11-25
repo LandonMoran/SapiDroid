@@ -194,6 +194,32 @@ to the certificate of the first release and the workflow refuses anything else.
 The ABI splits keep each download to the single architecture the phone uses,
 with a universal APK for anyone who is unsure.
 
+## Benchmarking the engines
+
+`sh bench/run.sh` clones the original `devinprater/SapiDroid` into `/tmp` and builds three variants
+with the same compiler: the original at the `-O2` it shipped with, the original at this repository's
+flags (`-O3 -fno-math-errno`), and this repository. It measures 41 kernels across all four engines
+(every DSP leaf, the LPC/LSF stages, both post-filters, the FFTs, the transcendental emulations, the
+voice effects, Sonics and the vocoder) and prints ns per sample or per call with an FNV digest of
+each output, so the report shows whether the three builds agree bit for bit. Nothing is written
+inside the repository.
+
+Read the numbers with these caveats, all of which have bitten this work:
+
+- **Only a paired A/B proves a change.** The clock on a shared machine moves between states about
+  10% apart and code placement shifts timings by a similar amount, so the same source can read
+  376 ns in one build and 393 ns in another. The runner interleaves the variants and the report uses
+the median, but a single-kernel change still needs a dedicated before/after build run alternately
+  (15 rounds is enough to settle a 5% effect).
+- **A compiler flag change is not a code change.** Several of the largest ratios in the report are
+  `-O2` versus `-O3` on unchanged source (Anna's FIR, OneCore's Sonic, SAPI 4's scaling loops).
+  Keep the two columns apart when deciding what to fix.
+- **Kernel time is not speech time.** The per-sample vocoders cost roughly 0.5 ms per second of
+  audio, so a 10% kernel win is invisible next to frontend parsing, voice-data reads and the JNI
+  round trip. Measure those before claiming an end-to-end improvement.
+- The host numbers come from x86-64 GCC; the app is Clang for ARM. They compare code fairly, they
+  are not device timings.
+
 ## Gotchas
 
 - **Voice data is not source.** Never commit `.vce`, `.spd`, `M1033*` files or
