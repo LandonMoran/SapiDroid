@@ -11,12 +11,34 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class FallbackSpeechTest {
     @Test fun noInstalledVoiceStreamsOneUtteranceThroughAnotherEngine() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assumeTrue(VoiceCatalog.installed(context).isEmpty())
+        assertFallback("System fallback")
+    }
+
+    @Test fun unreadableVoiceFallsBackBeforeEmittingAudio() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assumeTrue(VoiceCatalog.installed(context).isEmpty())
+        val dir = File(context.createDeviceProtectedStorageContext().filesDir, "voice")
+        val files = listOf("MSTTSLocEnUS.dat", "M1033David.APM", "M1033David.INI").map { File(dir, it) }
+        assumeTrue(files.none { it.exists() })
+        assertTrue(dir.isDirectory || dir.mkdirs())
+        try {
+            files.forEach { it.writeText("invalid") }
+            assertFallback("David (OneCore)")
+        } finally {
+            files.forEach { it.delete() }
+        }
+    }
+
+    private fun assertFallback(expectedVoice: String) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val ready = CountDownLatch(1)
         val init = AtomicInteger(TextToSpeech.ERROR)
@@ -28,7 +50,7 @@ class FallbackSpeechTest {
         try {
             assertTrue("engine initialization timed out", ready.await(30, TimeUnit.SECONDS))
             assertEquals(TextToSpeech.SUCCESS, init.get())
-            assertTrue("client did not bind SapiDroid", tts.voices.any { it.name == "System fallback" })
+            assertTrue("client did not bind SapiDroid", tts.voices.any { it.name == expectedVoice })
             val done = CountDownLatch(1)
             val errors = AtomicInteger()
             val bytes = AtomicInteger()

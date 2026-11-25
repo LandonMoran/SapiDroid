@@ -232,7 +232,7 @@ class SapiDroidService : TextToSpeechService() {
             }
         } catch (t: Throwable) {
             Log.e(TAG, "worker synthesis failed", t)
-            callback.error()
+            if (!fallback.speak(text, ratePercent, pitchPercent, callback) && !stopped.get()) callback.error()
             return
         }
         // Sample rate first: the worker caches the open handle, so this is
@@ -251,8 +251,9 @@ class SapiDroidService : TextToSpeechService() {
             return
         }
 
+        val delivered = AtomicBoolean(false)
         val ok = try {
-            speak(worker!!, voice, ratePercent, pitchPercent, text, callback, rateHz)
+            speak(worker!!, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered)
         } catch (t: Throwable) {
             Log.e(TAG, "worker synthesis failed", t)
             false
@@ -266,6 +267,8 @@ class SapiDroidService : TextToSpeechService() {
             return
         }
         if (!ok) {
+            if (!delivered.get() && fallback.speak(text, ratePercent, pitchPercent, callback)) return
+            if (stopped.get()) return
             try {
                 callback.error()
             } catch (t: Throwable) {
@@ -282,11 +285,11 @@ class SapiDroidService : TextToSpeechService() {
         pitchPercent: Int,
         text: String,
         callback: SynthesisCallback,
-        rateHz: Int
+        rateHz: Int,
+        delivered: AtomicBoolean
     ): Boolean {
         var worker = startWorker
         var replaced = false
-        val delivered = AtomicBoolean(false)
         while (true) {
             try {
                 return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered)

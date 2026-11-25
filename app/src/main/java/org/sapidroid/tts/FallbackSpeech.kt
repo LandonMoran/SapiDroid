@@ -46,7 +46,18 @@ internal class FallbackSpeech(private val context: Context, private val stopped:
                 status = it
                 ready.countDown()
             }, packageName)
-            val initialized = ready.await(5, TimeUnit.SECONDS)
+            val deadline = android.os.SystemClock.elapsedRealtime() + 5_000
+            var initialized = false
+            while (!stopped.get() && android.os.SystemClock.elapsedRealtime() < deadline) {
+                if (ready.await(100, TimeUnit.MILLISECONDS)) {
+                    initialized = true
+                    break
+                }
+            }
+            if (stopped.get()) {
+                candidate.shutdown()
+                return null
+            }
             if (initialized && status == TextToSpeech.SUCCESS && isExternal(candidate)) {
                 engine = candidate
                 return candidate
