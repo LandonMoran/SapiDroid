@@ -1,5 +1,6 @@
 package org.sapidroid.tts
 
+import android.os.Looper
 import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
@@ -92,7 +93,7 @@ class SapiDroidService : TextToSpeechService() {
     // ------------------------------------------------------------------
 
     private fun installedVoices(): List<VoiceCatalog.Info> {
-        DeviceStorage.migrateIfNeeded(this)
+        if (Looper.myLooper() != Looper.getMainLooper()) DeviceStorage.migrateIfNeeded(this)
         return VoiceCatalog.installed(this)
     }
 
