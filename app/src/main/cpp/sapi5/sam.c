@@ -283,9 +283,10 @@ static void lsf_to_lpc(float *lsf, int order, float *a)
 
 /* FUN_5ed58259: split-radix inverse real FFT (Sorensen packing: re[0..n/2], im[k] at x[n-k]),
  * scaled by 1/n. `sine` holds sin(2*pi*k/(2n)) for k in [0, 2n). */
-static void ifft_split_radix(float *x, int n, int m, const float *sine)
+static void ifft_split_radix(float *restrict x, int n, int m, const float *restrict sine)
 {
     const double r2 = (double)0.70710677f;
+    const float *const sine_q = sine + n / 2;
     int q = n / 2, n2 = n * 2, step = 1, k, i, j, is, id;
     for (k = 1; k < m; k++) {
         int n4, n8;
@@ -316,8 +317,8 @@ static void ifft_split_radix(float *x, int n, int m, const float *sine)
         } while (is < n - 1);
         for (j = 1; j < n8; j++) {
             int e = j * step;
-            double cc1 = sine[2 * e + q], ss1 = sine[2 * e];
-            double cc3 = sine[6 * e + q], ss3 = sine[6 * e];
+            double cc1 = sine_q[2 * e], ss1 = sine[2 * e];
+            double cc3 = sine_q[6 * e], ss3 = sine[6 * e];
             is = 0;
             id = n2 * 2;
             do {
@@ -575,10 +576,14 @@ static void lpc_filter(sam_synth *s, const float *a, float *x, int n, float gain
     float *mem = s->mem;
     for (k = 0; k < n; k++) {
         float acc = (float)((double)a[0] * x[k]);
-        for (i = order; i > 0; i--) {
+        for (i = order; i > 1; i--) {
             acc = (float)((double)acc - (double)mem[i] * a[i]);
-            mem[i] = i > 1 ? mem[i - 1] : acc;
+            mem[i] = mem[i - 1];
         }
+        /* The last tap is peeled off so the state shift needs no per-iteration test, and its result
+         * goes into mem[1] exactly as the engine's "mem[i] = i > 1 ? mem[i - 1] : acc" does. */
+        acc = (float)((double)acc - (double)mem[1] * a[1]);
+        mem[1] = acc;
         mem[0] = acc;
         x[k] = (float)((double)gain * acc);
     }

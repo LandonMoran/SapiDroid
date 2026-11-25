@@ -3,6 +3,21 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Release signing comes from the environment: .github/workflows/release.yml decodes the keystore
+// from repository secrets into KEYSTORE_FILE and exports the passwords. A local build without them
+// still works; the release APK is then simply unsigned.
+val releaseKeystore = System.getenv("KEYSTORE_FILE")
+val releaseStorePassword = System.getenv("KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("KEY_ALIAS")
+val releaseKeyPassword = System.getenv("KEY_PASSWORD")
+val releaseSigningReady = !releaseKeystore.isNullOrBlank() && !releaseStorePassword.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()
+
+// The release workflow passes the version taken from its tag. versionCode defaults to the value in
+// this file; the workflow passes the commit count so every release can be installed over the last.
+val versionCodeOverride = (project.findProperty("versionCode") as String?)?.toIntOrNull()
+val versionNameOverride = project.findProperty("versionName") as String?
+
 android {
     namespace = "org.sapidroid.tts"
     compileSdk = 34
@@ -11,8 +26,8 @@ android {
         applicationId = "org.sapidroid.tts"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "0.10.0"
+        versionCode = versionCodeOverride ?: 13
+        versionName = versionNameOverride ?: "0.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
@@ -26,11 +41,39 @@ android {
         }
     }
 
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = file(releaseKeystore!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }
         debug {
+        }
+    }
+
+    // The release workflow asks for one APK per ABI plus a universal one (-PabiSplits); ordinary
+    // builds keep the single APK that CI and `assembleDebug` expect.
+    if (project.hasProperty("abiSplits")) {
+        splits {
+            abi {
+                isEnable = true
+                reset()
+                include("arm64-v8a", "armeabi-v7a")
+                isUniversalApk = true
+            }
         }
     }
 

@@ -6,15 +6,22 @@
 #include "crt_vc.h"
 #include <string.h>
 
+// The engine keeps its accumulator in mem[0] and stores it back after every tap, so each tap has to
+// wait for the previous store to complete. Keeping it in a register and writing mem[0] once per
+// sample gives the same values (the same products, the same x87 rounding, the same order) at twice
+// the speed. The last tap is peeled off because its result also lands in mem[1]: the engine's
+// "mem[k] = mem[k - 1]" copies the already-updated mem[0] there.
 void dsp_allpole(const float *a, int order, float *mem, float *x, int n) {
     for (; n > 0; n--, x++) {
-        mem[0] = *x;
-        for (int k = order; k > 0; k--) {
-            double p = (double)a[k] * mem[k];
-            mem[0] = (float)((double)mem[0] - p);
+        float v = *x;
+        for (int k = order; k > 1; k--) {
+            v = (float)((double)v - (double)a[k] * mem[k]);
             mem[k] = mem[k - 1];
         }
-        *x = mem[0];
+        v = (float)((double)v - (double)a[1] * mem[1]);
+        mem[1] = v;
+        mem[0] = v;
+        *x = v;
     }
 }
 
@@ -86,7 +93,7 @@ void dsp_scale_b(float *x, int n, float g) {
     for (; n > 0; n--, x++) *x = (float)((double)g * *x);
 }
 
-void dsp_fold_pulse(float *dst, int n, const float *src, int len) {
+void dsp_fold_pulse(float *restrict dst, int n, const float *restrict src, int len) {
     int h = len / 2;
     int m = h > n ? n : h;
     for (int i = 0; i < m; i++) dst[i] = src[i];
@@ -94,7 +101,7 @@ void dsp_fold_pulse(float *dst, int n, const float *src, int len) {
     for (int k = 0; k < m; k++) dst[n - m + k] = (float)((double)src[len - m + k] + dst[n - m + k]);
 }
 
-void dsp_place_halves(float *dst, const float *src, int off, int n, int len) {
+void dsp_place_halves(float *restrict dst, const float *restrict src, int off, int n, int len) {
     for (int i = 0; i < n; i++) dst[off + i] = src[i];
     int b = len - off - n + 1;
     for (int i = 0; i < n; i++) dst[b + i] = src[n + i];

@@ -161,11 +161,38 @@ one of the engine's own sample rates) and keep the cancellation checks between
 units. Do not add fast-math or floating-point contraction flags to the OneCore
 build; bit-exactness depends on them being off.
 
-**Cut a release.** Bump `versionCode` and `versionName` in
-`app/build.gradle.kts`, make sure CI is green, build the APK with the release
-key, and publish a GitHub release with notes and the APK attached. The APK must
-be signed with the same key as the previous release, or users have to uninstall
-— and uninstalling deletes their voice data.
+**Cut a release.** The release is built and published by
+`.github/workflows/release.yml`. Bump `versionCode` and `versionName` in
+`app/build.gradle.kts` (a local build uses them; the workflow overrides both
+from the tag), make sure CI is green, then push a tag:
+
+```bash
+git tag v0.11.0
+git push origin v0.11.0
+```
+
+The workflow decodes the release keystore from repository secrets, builds
+`:app:assembleRelease` with `-PabiSplits` (one APK per ABI plus a universal
+APK), sets `versionName` to the tag without its `v` and `versionCode` to the
+commit count, checks each APK's signing certificate, and attaches the APKs to
+the GitHub release for that tag. `workflow_dispatch` rebuilds an existing tag.
+
+It needs these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | What it is |
+| --- | --- |
+| `KEYSTORE_BASE64` | the release keystore, base64-encoded |
+| `KEYSTORE_PASSWORD` | the keystore password |
+| `KEY_ALIAS` | the key alias inside it |
+| `KEY_PASSWORD` | the key password |
+| `EXPECTED_CERT_SHA256` | optional: the certificate's SHA-256, so a wrong keystore fails the build |
+
+Every release must use the same key as the previous one: a build signed with a
+different key has to be installed after an uninstall, and uninstalling deletes
+the user's voice data. That is what `EXPECTED_CERT_SHA256` guards; set it once
+to the certificate of the first release and the workflow refuses anything else.
+The ABI splits keep each download to the single architecture the phone uses,
+with a universal APK for anyone who is unsure.
 
 ## Gotchas
 

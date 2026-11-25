@@ -198,7 +198,7 @@ static short softclip(float y)
 static void isynth(ZbVoice *v, const int32_t *lsf, int p, const int32_t *gain, const int32_t *exc, int nfr, int shift, short *out)
 {
     short *B = (short *)malloc(sizeof(short) * (size_t)(p + shift));
-    int c[64], a[64];
+    int c[64], a[64], ar[64];
     int u, n, k;
     memcpy(B, v->isyn_hist, sizeof(short) * p);
     for (u = 0; u < nfr; u++) {
@@ -213,13 +213,18 @@ static void isynth(ZbVoice *v, const int32_t *lsf, int p, const int32_t *gain, c
             c[k] = zb_cos2048[ci > 2047 ? 2047 : ci];
         }
         ilsp2lpc(c, p, a);
+        /* Reversing the coefficients once per frame turns the tap loop into an ascending walk over
+         * both B and the coefficients. Integer addition is associative and the sum cannot overflow
+         * (|B| < 2^15, |a| < 2^32, 24 terms < 2^51), so the filter output is unchanged; the straight
+         * memory access is what the compiler can vectorise. */
+        for (k = 0; k < p; k++) ar[k] = a[p - 1 - k];
         for (;;) {
             int bad = 0;
             tries++;
             for (n = 0; n < shift; n++) {
                 int64_t acc = (int64_t)exc[u * shift + n] * g * 4;
                 int y;
-                for (k = 0; k < p; k++) acc += -(int64_t)B[n + p - 1 - k] * a[k];
+                for (k = 0; k < p; k++) acc += -(int64_t)B[n + k] * ar[k];
                 acc >>= 16;
                 y = acc < -0x8000 ? -0x8000 : (acc > 0x7fff ? 0x7fff : (int)acc);
                 B[n + p] = (short)y;
@@ -230,6 +235,7 @@ static void isynth(ZbVoice *v, const int32_t *lsf, int p, const int32_t *gain, c
             {
                 float fac = 0.99f, mm = 0.99f;
                 for (k = 0; k < p; k++) { a[k] = (int)((float)a[k] * fac); fac = fac * mm; }
+                for (k = 0; k < p; k++) ar[k] = a[p - 1 - k];
             }
         }
         memmove(B, B + shift, sizeof(short) * p);

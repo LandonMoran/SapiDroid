@@ -79,14 +79,23 @@ static int32_t trunc_f(float x) { return (int32_t)x; }
 static float maxss(float a, float b) { return a > b ? a : b; }
 static float minss(float a, float b) { return a < b ? a : b; }
 
-/* MSB-first bit reader (FUN_100756b1), at most 32 bits */
+/* MSB-first bit reader (FUN_100756b1), at most 32 bits.
+ * Reads whole bytes instead of single bits: the value is assembled `take` bits at a time from the
+ * current byte, which is the same MSB-first sequence for every field the decoder asks for. */
 static uint32_t getbits(const uint8_t *b, uint32_t pos, int n)
 {
     uint32_t v = 0;
+    int bit = (int)(pos & 7);
     if (n > 32) n = 32;
-    while (n-- > 0) {
-        v = v << 1 | ((b[pos >> 3] >> (7 - (pos & 7))) & 1);
-        pos++;
+    if (n <= 0) return 0;
+    b += pos >> 3;
+    while (n > 0) {
+        int take = 8 - bit;
+        if (take > n) take = n;
+        v = (v << take) | (uint32_t)((*b >> (8 - bit - take)) & ((1u << take) - 1u));
+        n -= take;
+        bit = 0;
+        b++;
     }
     return v;
 }

@@ -12,7 +12,7 @@
 static const double ZB_PI = 3.141592653589793;
 
 /* FUN_18000b1f0: "valid" FIR, products in float accumulated in double, first taps-1 outputs 0 */
-static void fir_valid(const float *h, const float *x, float *out, int n)
+static void fir_valid(const float *restrict h, const float *restrict x, float *restrict out, int n)
 {
     int i, k;
     for (i = 0; i < 40 && i < n; i++) out[i] = 0.0f;

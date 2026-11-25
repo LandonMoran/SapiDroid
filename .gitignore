@@ -5,3 +5,6 @@ local.properties
 .idea/
 app/build/
 app/.cxx/
+
+# Local backup of the release signing key (never commit)
+.release-backup/

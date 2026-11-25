@@ -1,10 +1,17 @@
 // Inverse real split-radix FFT of msttssyn.dll (@0x63684b60), decompiled from the x87 code: every value
 // the original parks in a float stack slot is rounded to float here too (the f32 temporaries).
+//
+// Performance notes (no arithmetic changes): the scratch buffer and the sine table never overlap, so
+// both are restrict-qualified, which lets the compiler keep loaded values in registers across the
+// inner runs instead of reloading them through the pointers; the sine base of the stage is hoisted
+// out of the j loop. Every add, subtract, multiply, float rounding and division is the same
+// expression in the same order as before, so the output is bit-identical.
 #include "fft.h"
 
-void fft_inverse_real(float *x, int n, int m, const float *sine) {
+void fft_inverse_real(float *restrict x, int n, int m, const float *restrict sine) {
     const double r2 = (double)0.70710677f;
     const int q = n / 2;
+    const float *const sine_q = sine + q;
     int n2 = 2 * n, step = 1;
     for (int k = m - 1; k > 0; k--) {
         int id = n2;
@@ -43,8 +50,8 @@ void fft_inverse_real(float *x, int n, int m, const float *sine) {
             } while (is < n - 1);
         }
         for (int j = 1; j < n8; j++) {
-            const float cc1 = sine[step * j + q], ss1 = sine[step * j];
-            const float cc3 = sine[3 * step * j + q], ss3 = sine[3 * step * j];
+            const float cc1 = sine_q[step * j], ss1 = sine[step * j];
+            const float cc3 = sine_q[3 * step * j], ss3 = sine[3 * step * j];
             is = 0;
             id = 2 * n2;
             if (n - 1 <= 0) continue;

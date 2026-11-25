@@ -84,10 +84,14 @@ add_library(sapidroid SHARED sapidroid_jni.c ${ENGINE_SOURCES} ${ANNA_SOURCES} $
 
 target_include_directories(sapidroid PRIVATE ${ENGINE_DIR} ${ANNA_DIR} ${SAPI4_DIR}/lib ${SAPI4_DIR}/src ${SAPI4_DIR}/port ${SAPI5_DIR})
 
-# The engine is bit-exact only without floating point contraction and fast math.
+# The engine is bit-exact only without floating point contraction and fast math. -O3 and
+# -fno-math-errno change neither: they only remove errno tracking and enable inlining, loop
+# unrolling and vectorisation that the compiler would otherwise skip (no reassociation is
+# allowed without -ffast-math, so the order of every floating point operation is kept).
 target_compile_options(sapidroid PRIVATE
     -std=c99
-    -O2
+    -O3
+    -fno-math-errno
     -ffp-contract=off
     -fno-fast-math
     -fno-finite-math-only
