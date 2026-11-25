@@ -311,6 +311,7 @@ class SapiDroidWorkerService : Service() {
     }
 
     private fun synthChunk(
+        id: Int,
         info: VoiceCatalog.Info,
         ratePercent: Int,
         pitchPercent: Int,
@@ -319,7 +320,7 @@ class SapiDroidWorkerService : Service() {
         return when (info.engine) {
             VoiceCatalog.Engine.ONECORE -> {
                 val h = openZira(info.name)
-                if (h == 0L) null else {
+                if (h == 0L || isCancelled(id)) null else {
                     NativeZira.setRate(h, sapiRate(ratePercent, 20))
                     NativeZira.setPitch(h, sapi5Pitch(pitchPercent))
                     NativeZira.speak(h, piece)
@@ -327,7 +328,7 @@ class SapiDroidWorkerService : Service() {
             }
             VoiceCatalog.Engine.ANNA -> {
                 val h = openAnna(info.name)
-                if (h == 0L) null else {
+                if (h == 0L || isCancelled(id)) null else {
                     NativeAnna.setRate(h, sapiRate(ratePercent, 18))
                     NativeAnna.setPitch(h, sapi5Pitch(pitchPercent))
                     NativeAnna.speak(h, piece)
@@ -335,7 +336,7 @@ class SapiDroidWorkerService : Service() {
             }
             VoiceCatalog.Engine.SAPI5 -> {
                 val h = openSapi5(info.name)
-                if (h == 0L) null else {
+                if (h == 0L || isCancelled(id)) null else {
                     NativeSapi5.setRate(h, sapiRate(ratePercent, 18))
                     NativeSapi5.setPitch(h, sapi5Pitch(pitchPercent))
                     NativeSapi5.speak(h, piece)
@@ -343,7 +344,7 @@ class SapiDroidWorkerService : Service() {
             }
             VoiceCatalog.Engine.SAPI4 -> {
                 val h = openSapi4(info.name)
-                if (h == 0L) null else {
+                if (h == 0L || isCancelled(id)) null else {
                     val lim = NativeSapi4.limits(h)
                     if (lim != null && lim.size >= 6) {
                         NativeSapi4.setSpeed(
@@ -398,13 +399,13 @@ class SapiDroidWorkerService : Service() {
         for (piece in StreamingText.split(text)) {
             if (isCancelled(id)) break
             val samples: ShortArray? = try {
-                synthChunk(info, ratePercent, pitchPercent, piece)
+                synthChunk(id, info, ratePercent, pitchPercent, piece)
             } catch (t: Throwable) {
                 Log.e(TAG, "synthesis failed", t)
                 null
             }
             if (samples == null) {
-                synchronized(state) { failed = true }
+                synchronized(state) { if (!cancelled) failed = true }
                 break
             }
             if (samples.isNotEmpty()) {
