@@ -1,5 +1,5 @@
 /* Synthetic driver test: cc -std=c99 -ffunction-sections -fdata-sections
- * engine/tests/zira_tts_host_test.c -pthread -Wl,--gc-sections -o zira_tts_host_test */
+ * engine/tests/zira_tts_host_test.c -pthread -Wl,--gc-sections,--wrap=malloc -o zira_tts_host_test */
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
@@ -10,10 +10,19 @@
 static char pieces[8][128];
 static int npieces, sentence_result, process_result, delivered, ends;
 static int wait_for_cancel, synth_ready;
+static int fail_malloc, last_xml;
+
+void *__real_malloc(size_t size);
+void *__wrap_malloc(size_t size)
+{
+    if (fail_malloc) { fail_malloc = 0; return NULL; }
+    return __real_malloc(size);
+}
 
 int zf1_speak_utf8(zf1_engine *e, const char *text, int xml)
 {
-    (void)e; (void)xml;
+    (void)e;
+    last_xml = xml;
     assert(npieces < 8);
     snprintf(pieces[npieces++], sizeof pieces[0], "%s", text);
     return 0;
@@ -93,6 +102,20 @@ int main(void)
     npieces = ends = 0;
     assert(zira_tts_speak(&t, "a<lang id='x'>b</lang>c", ZIRA_SPEAK_XML, &cb) == 0);
     assert(npieces == 3 && !strcmp(pieces[0], "a") && !strcmp(pieces[1], "b") && !strcmp(pieces[2], "c"));
+
+    npieces = 0;
+    fail_malloc = 1;
+    assert(zira_tts_speak(&t, "plain", 0, NULL) == 0);
+    assert(fail_malloc == 1 && npieces == 1 && !strcmp(pieces[0], "plain") && last_xml == 0);
+    fail_malloc = 0;
+    t.male = 0;
+    npieces = 0;
+    fail_malloc = 1;
+    assert(zira_tts_speak(&t, "<s>female</s>", ZIRA_SPEAK_XML, NULL) == 0);
+    assert(fail_malloc == 1 && npieces == 1 && last_xml == 1);
+    t.male = 1;
+    fail_malloc = 1;
+    assert(zira_tts_speak(&t, "male", ZIRA_SPEAK_XML, NULL) == -1 && fail_malloc == 0);
 
     npieces = ends = 0;
     sentence_result = -1;
