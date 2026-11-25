@@ -7,6 +7,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
 import android.speech.tts.Voice
 import android.util.Log
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -20,8 +22,7 @@ class SapiDroidService : TextToSpeechService() {
     companion object {
         private const val TAG = "SapiDroid"
         private const val BUSY = SapiDroidWorkerService.BUSY
-        // Small pulls so the first audio ships as soon as the first
-        // sentence is ready; later pulls keep draining while synthesis runs.
+        // Small pulls deliver audio while synthesis is still running.
         private const val PULL_BYTES = 16 * 1024
         private const val PULL_WAIT_MS = 100
         private const val SAY_WAIT_MS = 400
@@ -29,10 +30,14 @@ class SapiDroidService : TextToSpeechService() {
     }
 
     private val stopped = AtomicBoolean(false)
+    private val retirementChecks = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "sapidroid-retire-check")
+    }
 
     @Volatile private var currentWorker: IZiraWorker? = null
     @Volatile private var currentRequest: Int = -1
-    private val fallback by lazy { FallbackSpeech(this, stopped) }
+    private val fallbackDelegate = lazy { FallbackSpeech(this, stopped) }
+    private val fallback by fallbackDelegate
     // A voice's output rate never changes, so remember it after the first
     // lookup and skip a binder round trip on every later utterance.
     private val rateCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
@@ -48,7 +53,12 @@ class SapiDroidService : TextToSpeechService() {
                 // One-time carry-over of voice data into device-protected
                 // storage, so Direct Boot (lock screen) can read it.
                 DeviceStorage.migrateIfNeeded(this)
-                currentWorker = SapiDroidWorkers.acquire(this)
+                val worker = SapiDroidWorkers.acquire(this)
+                currentWorker = worker
+                VoiceCatalog.savedInstalledVoice(this)?.let { voice ->
+                    val rate = worker.sampleRate(voice.label)
+                    if (rate > 0) rateCache[voice.label] = rate
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "engine worker warm-up failed", t)
             }
@@ -56,8 +66,9 @@ class SapiDroidService : TextToSpeechService() {
     }
 
     override fun onDestroy() {
+        synchronized(retirementChecks) { retirementChecks.shutdownNow() }
         val worker = currentWorker
-        fallback.close()
+        if (fallbackDelegate.isInitialized()) fallback.close()
         currentWorker = null
         SapiDroidWorkers.retire(worker)
         super.onDestroy()
@@ -65,7 +76,7 @@ class SapiDroidService : TextToSpeechService() {
 
     override fun onStop() {
         stopped.set(true)
-        fallback.stop()
+        if (fallbackDelegate.isInitialized()) fallback.stop()
         val worker = currentWorker ?: return
         val id = currentRequest
         if (id <= 0) return
@@ -74,18 +85,17 @@ class SapiDroidService : TextToSpeechService() {
         } catch (t: Throwable) {
             Log.w(TAG, "cancel failed", t)
         }
-        Thread {
-            try {
-                Thread.sleep(RETIRE_GRACE_MS)
-            } catch (e: InterruptedException) {
-                return@Thread
+        synchronized(retirementChecks) {
+            if (!retirementChecks.isShutdown) {
+                retirementChecks.schedule({
+                    try {
+                        worker.retireIfStuck(id)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "worker retirement check failed", t)
+                    }
+                }, RETIRE_GRACE_MS, TimeUnit.MILLISECONDS)
             }
-            try {
-                worker.retireIfStuck(id)
-            } catch (t: Throwable) {
-                Log.w(TAG, "worker retirement check failed", t)
-            }
-        }.apply { name = "sapidroid-retire-check" }.start()
+        }
     }
 
     // ------------------------------------------------------------------
@@ -210,11 +220,14 @@ class SapiDroidService : TextToSpeechService() {
 
         val ratePercent = request.speechRate.takeIf { it > 0 } ?: 100
         val pitchPercent = request.pitch.takeIf { it > 0 } ?: 100
-        val installed = installedVoices()
-        val saved = VoiceCatalog.savedVoice(this, installed)
-        val info = VoiceCatalog.resolveForSynthesis(
-            installed, saved, request.voiceName, request.language, request.country
-        )
+        if (Looper.myLooper() != Looper.getMainLooper()) DeviceStorage.migrateIfNeeded(this)
+        val info = VoiceCatalog.savedInstalledVoice(this) ?: run {
+            val installed = installedVoices()
+            val saved = VoiceCatalog.savedVoice(this, installed)
+            VoiceCatalog.resolveForSynthesis(
+                installed, saved, request.voiceName, request.language, request.country
+            )
+        }
         if (info == null) {
             if (!fallback.speak(text, ratePercent, pitchPercent, callback) && !stopped.get()) callback.error()
             return
@@ -322,15 +335,8 @@ class SapiDroidService : TextToSpeechService() {
             throw WorkerGone("say failed", t)
         }
         val requestId = if (id == BUSY) {
-            // A transient overlap (e.g. flush racing the previous tail)
-            // should not kill the worker process: one quick retry on the
-            // same worker covers it; only a stuck engine retires it.
-            try {
-                Thread.sleep(120)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                throw WorkerGone("interrupted", e)
-            }
+            // Wait on the worker again instead of sleeping: it wakes as soon
+            // as the interrupted request has left the native engine.
             val retry = try {
                 worker.say(voice, ratePercent, pitchPercent, text, SAY_WAIT_MS)
             } catch (t: Throwable) {
