@@ -79,6 +79,10 @@ object VoiceCatalog {
 
     val all: List<Info> = sapi5 + sapi4 + oneCore + anna
 
+    private val exactLabels = all.associate { info ->
+        info.label to all.first { it.label.equals(info.label, ignoreCase = true) }
+    }
+
     val defaultVoice: String = "David"
 
     private const val PREFS = "sapidroid"
@@ -98,15 +102,14 @@ object VoiceCatalog {
     @Synchronized fun savedVoice(context: Context, voices: List<Info> = installed(context)): Info? {
         // In-memory cache first: the picker's choice is visible to the next
         // utterance in this process without waiting on disk I/O.
-        val store = storage(context)
         if (!defaultCacheValid || cachedDefaultLabel == null) {
-            cachedDefaultLabel = store.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            cachedDefaultLabel = storage(context).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_DEFAULT_VOICE, null)
             defaultCacheValid = true
         }
         val label = cachedDefaultLabel ?: return null
         val info = infoFor(label) ?: return null
-        return if (voices.any { it.label == info.label }) info else null
+        return if (voices === all || voices.any { it.label == info.label }) info else null
     }
 
     /**
@@ -168,6 +171,7 @@ object VoiceCatalog {
 
     fun infoFor(name: String?): Info? {
         if (name == null) return null
+        exactLabels[name]?.let { return it }
         all.firstOrNull { it.label.equals(name, ignoreCase = true) }?.let { return it }
         all.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { return it }
         val bare = name.removeSuffix(" (SAPI 5)")

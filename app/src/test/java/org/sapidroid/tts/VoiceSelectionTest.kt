@@ -23,4 +23,14 @@ class VoiceSelectionTest {
     @Test fun noInstalledVoiceUsesFallback() {
         assertNull(VoiceCatalog.resolveForSynthesis(emptyList(), null, david.label, "eng", "USA"))
     }
+
+    @Test fun exactAndCaseInsensitiveNamesPreserveCatalogPriority() {
+        for (voice in VoiceCatalog.all) {
+            val first = VoiceCatalog.all.first { it.label.equals(voice.label, ignoreCase = true) }
+            assertEquals(first, VoiceCatalog.infoFor(voice.label))
+            assertEquals(first, VoiceCatalog.infoFor(voice.label.uppercase(java.util.Locale.ROOT)))
+        }
+        assertEquals(VoiceCatalog.infoFor("Sam (SAPI 4)"), VoiceCatalog.infoFor("sam"))
+        assertNull(VoiceCatalog.infoFor("not an installed voice"))
+    }
 }

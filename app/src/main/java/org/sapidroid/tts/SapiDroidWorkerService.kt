@@ -35,7 +35,7 @@ class SapiDroidWorkerService : Service() {
 
     private val state = Object()
     private var currentId = 0
-    private var currentVoice = ""
+    private var currentInfo: VoiceCatalog.Info? = null
     private var busy = false
     private var finished = true
     private var failed = false
@@ -149,6 +149,7 @@ class SapiDroidWorkerService : Service() {
             waitMs: Int
         ): Int {
             val id: Int
+            val info = VoiceCatalog.infoFor(voice)
             synchronized(state) {
                 if (destroyed) return BUSY
                 val deadline = SystemClock.elapsedRealtime() + waitMs.coerceIn(0, 5_000)
@@ -168,7 +169,7 @@ class SapiDroidWorkerService : Service() {
                 }
                 currentId += 1
                 id = currentId
-                currentVoice = voice
+                currentInfo = info
                 busy = true
                 finished = false
                 failed = false
@@ -176,7 +177,7 @@ class SapiDroidWorkerService : Service() {
                 pending.clear()
                 pendingOffset = 0
                 pendingBytes = 0
-                synthesis.submit { runRequest(id, voice, ratePercent, pitchPercent, text) }
+                synthesis.submit { runRequest(id, voice, info, ratePercent, pitchPercent, text) }
             }
             return id
         }
@@ -230,7 +231,7 @@ class SapiDroidWorkerService : Service() {
                 pending.clear()
                 pendingOffset = 0
                 pendingBytes = 0
-                val info = VoiceCatalog.infoFor(currentVoice)
+                val info = currentInfo
                 val engine = info?.engine
                 val voiceName = info?.name ?: ""
                 val handle = when (engine) {
@@ -397,12 +398,12 @@ class SapiDroidWorkerService : Service() {
     private fun runRequest(
         id: Int,
         voice: String,
+        info: VoiceCatalog.Info?,
         ratePercent: Int,
         pitchPercent: Int,
         text: String
     ) {
         try {
-            val info = VoiceCatalog.infoFor(voice)
             if (BuildConfig.DEBUG && text.contains(HANG_PREFIX)) {
                 Log.w(TAG, "debug hang for request $id")
                 try {
