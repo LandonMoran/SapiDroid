@@ -23,7 +23,7 @@ object NativeSapi4 {
     @JvmStatic external fun setPitch(handle: Long, pitch: Int)
 
     /** Blocking; [cancel] from another thread stops it. Text is Windows-1252. */
-    @JvmStatic external fun speak(handle: Long, text: ByteArray): ShortArray?
+    @JvmStatic external fun speak(handle: Long, text: ByteArray, sink: PcmSink): Int
 
     @JvmStatic external fun cancel(handle: Long)
 

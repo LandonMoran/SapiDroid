@@ -5,31 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "sam_tts.h"
-
-typedef struct {
-    int16_t *data;
-    size_t count;
-    size_t cap;
-    int failed;
-} pcm_buf;
-
-static int on_audio(const int16_t *pcm, size_t n, void *user) {
-    pcm_buf *b = (pcm_buf *)user;
-    if (b->count + n > b->cap) {
-        size_t cap = b->cap ? b->cap : 32768;
-        while (cap < b->count + n) cap *= 2;
-        int16_t *grown = (int16_t *)realloc(b->data, cap * sizeof(int16_t));
-        if (!grown) {
-            b->failed = 1;
-            return 1;
-        }
-        b->data = grown;
-        b->cap = cap;
-    }
-    memcpy(b->data + b->count, pcm, n * sizeof(int16_t));
-    b->count += n;
-    return 0;
-}
+#include "pcm_stream.h"
 
 JNIEXPORT jlong JNICALL
 Java_org_sapidroid_tts_NativeSapi5_open(JNIEnv *env, jclass clazz,
@@ -79,37 +55,27 @@ Java_org_sapidroid_tts_NativeSapi5_sampleRate(JNIEnv *env, jclass clazz, jlong h
     return h ? sam_tts_sample_rate((sam_speech *)(intptr_t)h) : 0;
 }
 
-/* Blocking; sam_tts_cancel from another thread stops it. */
-JNIEXPORT jshortArray JNICALL
-Java_org_sapidroid_tts_NativeSapi5_speak(JNIEnv *env, jclass clazz, jlong h, jstring text) {
+JNIEXPORT jint JNICALL
+Java_org_sapidroid_tts_NativeSapi5_speak(JNIEnv *env, jclass clazz, jlong h, jstring text, jobject sink) {
     (void)clazz;
-    if (!h || !text) return NULL;
+    if (!h || !text) return -1;
+    pcm_stream stream;
+    if (pcm_stream_init(&stream, env, sink)) return -1;
     const char *c_text = (*env)->GetStringUTFChars(env, text, NULL);
-    if (!c_text) return NULL;
+    if (!c_text) return -1;
 
-    pcm_buf buf;
-    memset(&buf, 0, sizeof buf);
     sam_callbacks cb;
     memset(&cb, 0, sizeof cb);
-    cb.audio = on_audio;
-    cb.user = &buf;
+    cb.audio = pcm_stream_audio;
+    cb.user = &stream;
 
     int rc = sam_tts_speak((sam_speech *)(intptr_t)h, c_text, 0, &cb);
     (*env)->ReleaseStringUTFChars(env, text, c_text);
 
-    if (buf.failed) {
-        free(buf.data);
-        return NULL;
-    }
-    jshortArray out = (*env)->NewShortArray(env, (jsize)buf.count);
-    if (out && buf.count) {
-        (*env)->SetShortArrayRegion(env, out, 0, (jsize)buf.count, buf.data);
-    }
-    free(buf.data);
     if (rc < 0) {
         __android_log_print(4, "SapiDroidSapi5", "speak failed rc=%d", rc);
     }
-    return out;
+    return stream.failed ? -1 : rc;
 }
 
 JNIEXPORT void JNICALL
