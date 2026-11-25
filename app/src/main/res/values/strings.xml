@@ -5,6 +5,7 @@
 
     <string name="voice_label">Voice</string>
     <string name="no_voices">No voice data installed yet</string>
+    <string name="speech_safety">Keep another text-to-speech engine installed. Before uninstalling SapiDroid or installing an update that requires uninstalling it, select and test the other engine in Android text-to-speech settings. Uninstalling removes SapiDroid voice data.</string>
     <string name="voice_selected">Voice: %1$s</string>
     <string name="voice_refused">%1$s could not be selected. Download its voice data, then choose it again.</string>
 

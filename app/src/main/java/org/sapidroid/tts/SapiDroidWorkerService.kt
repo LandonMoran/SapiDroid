@@ -5,6 +5,8 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import java.io.File
+import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.ln
@@ -24,6 +26,7 @@ class SapiDroidWorkerService : Service() {
         private const val TAG = "SapiDroidWorker"
         const val BUSY = -2
         const val HANG_PREFIX = "\$HANG"
+        private const val MAX_PENDING_BYTES = 512 * 1024
     }
 
     private val synthesis = Executors.newSingleThreadExecutor { r ->
@@ -35,16 +38,19 @@ class SapiDroidWorkerService : Service() {
     private var currentVoice = ""
     private var busy = false
     private var finished = true
+    private var failed = false
     private var cancelled = false
     // Audio produced so far for the current request, drained by pull().
     // Chunks are appended as each sentence finishes so the first audio
     // arrives after the first sentence, not after the whole text.
-    private var pending: ByteArray = ByteArray(0)
+    private val pending = ArrayDeque<ByteArray>()
+    private var pendingOffset = 0
+    private var pendingBytes = 0
 
-    private val ziraHandles = HashMap<String, Long>()
-    private val annaHandles = HashMap<String, Long>()
-    private val s4Handles = HashMap<String, Long>()
-    private val s5Handles = HashMap<String, Long>()
+    private val ziraHandles = ConcurrentHashMap<String, Long>()
+    private val annaHandles = ConcurrentHashMap<String, Long>()
+    private val s4Handles = ConcurrentHashMap<String, Long>()
+    private val s5Handles = ConcurrentHashMap<String, Long>()
 
     @Volatile private var ziraDir: File? = null
     @Volatile private var annaDir: File? = null
@@ -57,7 +63,7 @@ class SapiDroidWorkerService : Service() {
     // Opening voices
     // ------------------------------------------------------------------
 
-    private fun openZira(voice: String): Long {
+    @Synchronized private fun openZira(voice: String): Long {
         ziraHandles[voice]?.let { if (it != 0L) return it }
         val dir = ziraDir ?: return 0
         val handle = NativeZira.open(dir.absolutePath, voice)
@@ -70,7 +76,7 @@ class SapiDroidWorkerService : Service() {
         return handle
     }
 
-    private fun openAnna(voice: String): Long {
+    @Synchronized private fun openAnna(voice: String): Long {
         annaHandles[voice]?.let { if (it != 0L) return it }
         val dir = annaDir ?: return 0
         val handle = NativeAnna.open(dir.absolutePath)
@@ -83,7 +89,7 @@ class SapiDroidWorkerService : Service() {
         return handle
     }
 
-    private fun openSapi4(mode: String): Long {
+    @Synchronized private fun openSapi4(mode: String): Long {
         s4Handles[mode]?.let { if (it != 0L) return it }
         val dir = s4Dir ?: return 0
         if (!s4Initialised) {
@@ -110,7 +116,7 @@ class SapiDroidWorkerService : Service() {
         return handle
     }
 
-    private fun openSapi5(voice: String): Long {
+    @Synchronized private fun openSapi5(voice: String): Long {
         s5Handles[voice]?.let { if (it != 0L) return it }
         val dir = s5Dir ?: return 0
         // Internal names carry a 5 so they cannot collide with the SAPI 4 voices.
@@ -159,8 +165,11 @@ class SapiDroidWorkerService : Service() {
                 currentVoice = voice
                 busy = true
                 finished = false
+                failed = false
                 cancelled = false
-                pending = ByteArray(0)
+                pending.clear()
+                pendingOffset = 0
+                pendingBytes = 0
             }
             synthesis.submit { runRequest(id, voice, ratePercent, pitchPercent, text) }
             return id
@@ -173,11 +182,17 @@ class SapiDroidWorkerService : Service() {
                 while (true) {
                     if (requestId != currentId) return null
                     if (cancelled) return null
-                    val buf = pending
-                    if (buf.isNotEmpty()) {
-                        val n = minOf(limit, buf.size)
-                        val out = buf.copyOfRange(0, n)
-                        pending = if (n == buf.size) ByteArray(0) else buf.copyOfRange(n, buf.size)
+                    val buf = pending.peekFirst()
+                    if (buf != null) {
+                        val n = minOf(limit, buf.size - pendingOffset)
+                        val out = buf.copyOfRange(pendingOffset, pendingOffset + n)
+                        pendingOffset += n
+                        pendingBytes -= n
+                        if (pendingOffset == buf.size) {
+                            pending.removeFirst()
+                            pendingOffset = 0
+                        }
+                        (state as java.lang.Object).notifyAll()
                         return out
                     }
                     if (finished) return null
@@ -194,44 +209,57 @@ class SapiDroidWorkerService : Service() {
         }
 
         override fun finished(requestId: Int): Boolean = synchronized(state) {
-            requestId == currentId && finished
+            requestId != currentId || finished
+        }
+
+        override fun failed(requestId: Int): Boolean = synchronized(state) {
+            requestId != currentId || failed
         }
 
         override fun cancel(requestId: Int) {
-            val engine: VoiceCatalog.Engine?
-            val handle: Long
             synchronized(state) {
                 if (requestId != currentId) return
                 cancelled = true
-                pending = ByteArray(0)
-                engine = VoiceCatalog.infoFor(currentVoice)?.engine
-                handle = when (engine) {
+                pending.clear()
+                pendingOffset = 0
+                pendingBytes = 0
+                val engine = VoiceCatalog.infoFor(currentVoice)?.engine
+                val handle = when (engine) {
                     VoiceCatalog.Engine.ONECORE -> ziraHandles[currentVoice] ?: 0L
                     VoiceCatalog.Engine.ANNA -> annaHandles[currentVoice] ?: 0L
                     VoiceCatalog.Engine.SAPI4 -> s4Handles[currentVoice] ?: 0L
                     VoiceCatalog.Engine.SAPI5 -> s5Handles[currentVoice] ?: 0L
                     null -> 0L
                 }
-                (state as java.lang.Object).notifyAll()
-            }
-            if (handle != 0L) {
-                try {
-                    when (engine) {
-                        VoiceCatalog.Engine.ONECORE -> NativeZira.cancel(handle)
-                        VoiceCatalog.Engine.ANNA -> NativeAnna.cancel(handle)
-                        VoiceCatalog.Engine.SAPI4 -> NativeSapi4.cancel(handle)
-                        VoiceCatalog.Engine.SAPI5 -> NativeSapi5.cancel(handle)
-                        null -> {}
+                if (handle != 0L) {
+                    try {
+                        when (engine) {
+                            VoiceCatalog.Engine.ONECORE -> NativeZira.cancel(handle)
+                            VoiceCatalog.Engine.ANNA -> NativeAnna.cancel(handle)
+                            VoiceCatalog.Engine.SAPI4 -> NativeSapi4.cancel(handle)
+                            VoiceCatalog.Engine.SAPI5 -> NativeSapi5.cancel(handle)
+                            null -> {}
+                        }
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "engine cancel failed", t)
                     }
-                } catch (t: Throwable) {
-                    Log.w(TAG, "engine cancel failed", t)
                 }
+                (state as java.lang.Object).notifyAll()
             }
         }
 
         override fun shutdown() {
             Log.i(TAG, "retiring worker process")
             android.os.Process.killProcess(android.os.Process.myPid())
+        }
+
+        override fun retireIfStuck(requestId: Int) {
+            synchronized(state) {
+                if (currentId == requestId && busy && cancelled) {
+                    Log.w(TAG, "retiring worker stuck on request $requestId")
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                }
+            }
         }
 
         override fun sampleRate(voice: String): Int {
@@ -273,13 +301,6 @@ class SapiDroidWorkerService : Service() {
         annaDir = File(store.filesDir, "anna").also { it.mkdirs() }
         s4Dir = File(store.filesDir, "sapi4").also { it.mkdirs() }
         s5Dir = File(store.filesDir, "sapi5").also { it.mkdirs() }
-        Thread {
-            try {
-                openZira(VoiceCatalog.defaultVoice)
-            } catch (t: Throwable) {
-                Log.e(TAG, "OneCore warm-up failed", t)
-            }
-        }.apply { name = "sapidroid-warmup" }.start()
     }
 
     // ------------------------------------------------------------------
@@ -288,49 +309,6 @@ class SapiDroidWorkerService : Service() {
 
     private fun isCancelled(id: Int): Boolean = synchronized(state) {
         id != currentId || cancelled
-    }
-
-    /**
-     * Splits long texts so the first audio ships after the first sentence
-     * instead of after the whole utterance. Every engine below already
-     * synthesizes sentence by sentence, so cutting on sentence boundaries
-     * keeps the output the same while first-audio latency drops from
-     * O(text) to O(first sentence).
-     */
-    private fun splitForStreaming(text: String): List<String> {
-        val trimmed = text.trim()
-        if (trimmed.length <= 350) return listOf(trimmed)
-        val out = mutableListOf<String>()
-        var start = 0
-        var i = 0
-        while (i < trimmed.length) {
-            val c = trimmed[i]
-            val endOfSentence = (c == '.' || c == '!' || c == '?') &&
-                (i + 1 >= trimmed.length || trimmed[i + 1].isWhitespace())
-            val hardBreak = c == '\n'
-            if ((endOfSentence || hardBreak) && i + 1 - start >= 60) {
-                var end = i + 1
-                while (end < trimmed.length && trimmed[end].isWhitespace()) end++
-                out.add(trimmed.substring(start, end).trim())
-                start = end
-                i = end
-                continue
-            }
-            if (i + 1 - start >= 450) {
-                var j = i
-                while (j > start && !trimmed[j].isWhitespace()) j--
-                if (j <= start) j = i
-                out.add(trimmed.substring(start, j).trim())
-                var next = j
-                while (next < trimmed.length && trimmed[next].isWhitespace()) next++
-                start = next
-                i = next
-                continue
-            }
-            i++
-        }
-        if (start < trimmed.length) out.add(trimmed.substring(start).trim())
-        return out.filter { it.isNotEmpty() }.ifEmpty { listOf(trimmed) }
     }
 
     private fun synthChunk(
@@ -408,6 +386,7 @@ class SapiDroidWorkerService : Service() {
         }
         if (info == null) {
             synchronized(state) {
+                failed = true
                 busy = false
                 finished = true
                 (state as java.lang.Object).notifyAll()
@@ -417,7 +396,7 @@ class SapiDroidWorkerService : Service() {
         // One native call per sentence: each chunk's PCM is published as
         // soon as it is ready, so pull() unblocks long before the tail
         // of a paragraph has been synthesized.
-        for (piece in splitForStreaming(text)) {
+        for (piece in StreamingText.split(text)) {
             if (isCancelled(id)) break
             val samples: ShortArray? = try {
                 synthChunk(info, ratePercent, pitchPercent, piece)
@@ -426,15 +405,24 @@ class SapiDroidWorkerService : Service() {
                 null
             }
             if (samples == null) {
-                // Keep whatever audio earlier chunks already published;
-                // an empty first chunk ends the request with no audio.
+                synchronized(state) { failed = true }
                 break
             }
             if (samples.isNotEmpty()) {
                 val bytes = toBytes(samples)
                 synchronized(state) {
+                    while (id == currentId && !cancelled && pendingBytes >= MAX_PENDING_BYTES) {
+                        try {
+                            (state as java.lang.Object).wait()
+                        } catch (e: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            cancelled = true
+                            break
+                        }
+                    }
                     if (id == currentId && !cancelled) {
-                        pending = pending + bytes
+                        pending.addLast(bytes)
+                        pendingBytes += bytes.size
                     }
                     (state as java.lang.Object).notifyAll()
                 }

@@ -41,7 +41,15 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         // Carry installed voices into device-protected storage once, so the
         // engine also works during Direct Boot (lock screen before unlock).
-        Thread { DeviceStorage.migrateIfNeeded(applicationContext) }
+        Thread {
+            DeviceStorage.migrateIfNeeded(applicationContext)
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    showVoiceData()
+                    refreshVoices()
+                }
+            }
+        }
             .apply { name = "sapidroid-storage-migrate" }.start()
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
@@ -120,11 +128,11 @@ class MainActivity : Activity() {
 
         tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {
-                showResult(getString(R.string.speak_started), announce = true)
+                showResult(getString(R.string.speak_started))
             }
 
             override fun onDone(id: String?) {
-                showResult(getString(R.string.speak_done), announce = true)
+                showResult(getString(R.string.speak_done))
             }
 
             /** Android calls this form from API 21 on; the one-argument form is dead. */

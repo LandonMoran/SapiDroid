@@ -72,23 +72,25 @@ internal object SapiDroidWorkers {
         }
 
         fun retire() {
-            if (retired) return
-            retired = true
-            unbind()
-            ready.countDown()
-            val target = api
-            api = null
-            if (target == null || !target.asBinder().isBinderAlive) {
-                closed.countDown()
-                return
-            }
-            try {
-                target.shutdown()
-            } catch (e: DeadObjectException) {
-                closed.countDown()
-            } catch (t: Throwable) {
-                Log.w(TAG, "shutdown failed", t)
-                closed.countDown()
+            synchronized(gate) {
+                if (retired) return
+                retired = true
+                unbind()
+                ready.countDown()
+                val target = api
+                api = null
+                if (target == null || !target.asBinder().isBinderAlive) {
+                    closed.countDown()
+                    return
+                }
+                try {
+                    target.shutdown()
+                } catch (e: DeadObjectException) {
+                    closed.countDown()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "shutdown failed", t)
+                    closed.countDown()
+                }
             }
         }
     }
@@ -102,20 +104,20 @@ internal object SapiDroidWorkers {
         synchronized(lock) {
             val existing = connection
             if (existing != null && !existing.retired) {
-                existing.api?.let { if (it.asBinder().isBinderAlive) return it }
-                existing.retire()
-            }
-            conn = Connection(ctx).also { c ->
-                c.bound = ctx.bindService(
-                    Intent(ctx, SapiDroidWorkerService::class.java),
-                    c,
-                    Context.BIND_AUTO_CREATE
-                )
-                if (!c.bound) {
-                    c.ready.countDown()
-                    c.closed.countDown()
+                conn = existing
+            } else {
+                conn = Connection(ctx).also { c ->
+                    c.bound = ctx.bindService(
+                        Intent(ctx, SapiDroidWorkerService::class.java),
+                        c,
+                        Context.BIND_AUTO_CREATE
+                    )
+                    if (!c.bound) {
+                        c.ready.countDown()
+                        c.closed.countDown()
+                    }
+                    connection = c
                 }
-                connection = c
             }
         }
         if (!conn.ready.await(BIND_TIMEOUT_S, TimeUnit.SECONDS)) {

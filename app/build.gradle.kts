@@ -11,8 +11,8 @@ android {
         applicationId = "org.sapidroid.tts"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.9.1"
+        versionCode = 12
+        versionName = "0.9.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -57,4 +57,5 @@ dependencies {
     implementation("androidx.core:core:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
+    testImplementation("junit:junit:4.13.2")
 }

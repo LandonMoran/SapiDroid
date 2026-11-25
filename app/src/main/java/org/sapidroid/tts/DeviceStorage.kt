@@ -39,7 +39,7 @@ object DeviceStorage {
      * storage is sealed, so there is nothing readable to move) and after the
      * marker is set. Never throws; a deferred move just retries next launch.
      */
-    fun migrateIfNeeded(appContext: Context) {
+    @Synchronized fun migrateIfNeeded(appContext: Context) {
         try {
             val device = context(appContext)
             val prefs = device.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -52,9 +52,10 @@ object DeviceStorage {
                 val dst = File(device.filesDir, name)
                 val dstEmpty = !dst.exists() ||
                     (dst.isDirectory && (dst.list()?.isEmpty() ?: true))
-                if (!dstEmpty) continue
                 dst.parentFile?.mkdirs()
-                if (!src.renameTo(dst)) {
+                if (!dstEmpty) {
+                    copyMissing(src, dst)
+                } else if (!src.renameTo(dst)) {
                     copyRecursively(src, dst)
                     src.deleteRecursively()
                 }
@@ -71,16 +72,34 @@ object DeviceStorage {
         }
     }
 
+    private fun copyMissing(src: File, dst: File) {
+        if (src.isDirectory) {
+            check(dst.isDirectory || dst.mkdirs()) { "cannot create $dst" }
+            for (child in src.listFiles() ?: throw IllegalStateException("cannot list $src")) {
+                copyMissing(child, File(dst, child.name))
+            }
+        } else if (!dst.exists()) {
+            copyRecursively(src, dst)
+        }
+    }
+
     private fun copyRecursively(src: File, dst: File) {
         if (src.isDirectory) {
-            dst.mkdirs()
-            for (child in src.listFiles() ?: emptyArray()) {
+            check(dst.isDirectory || dst.mkdirs()) { "cannot create $dst" }
+            for (child in src.listFiles() ?: throw IllegalStateException("cannot list $src")) {
                 copyRecursively(child, File(dst, child.name))
             }
         } else {
-            dst.parentFile?.mkdirs()
-            FileInputStream(src).use { input ->
-                FileOutputStream(dst).use { output -> input.copyTo(output, 1 shl 16) }
+            val parent = dst.parentFile ?: throw IllegalStateException("no parent for $dst")
+            check(parent.isDirectory || parent.mkdirs()) { "cannot create $parent" }
+            val part = File.createTempFile("migration-", ".part", parent)
+            try {
+                FileInputStream(src).use { input ->
+                    FileOutputStream(part).use { output -> input.copyTo(output, 1 shl 16) }
+                }
+                check(part.renameTo(dst)) { "cannot move $part to $dst" }
+            } finally {
+                if (part.exists() && !part.delete()) Log.w(TAG, "could not delete $part")
             }
         }
     }

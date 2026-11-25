@@ -6,7 +6,6 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
 import android.speech.tts.Voice
 import android.util.Log
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -32,6 +31,7 @@ class SapiDroidService : TextToSpeechService() {
 
     @Volatile private var currentWorker: IZiraWorker? = null
     @Volatile private var currentRequest: Int = -1
+    private lateinit var fallback: FallbackSpeech
     // A voice's output rate never changes, so remember it after the first
     // lookup and skip a binder round trip on every later utterance.
     private val rateCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
@@ -42,6 +42,7 @@ class SapiDroidService : TextToSpeechService() {
 
     override fun onCreate() {
         super.onCreate()
+        fallback = FallbackSpeech(this, stopped)
         Thread {
             try {
                 // One-time carry-over of voice data into device-protected
@@ -56,6 +57,7 @@ class SapiDroidService : TextToSpeechService() {
 
     override fun onDestroy() {
         val worker = currentWorker
+        fallback.close()
         currentWorker = null
         SapiDroidWorkers.retire(worker)
         super.onDestroy()
@@ -63,6 +65,7 @@ class SapiDroidService : TextToSpeechService() {
 
     override fun onStop() {
         stopped.set(true)
+        fallback.stop()
         val worker = currentWorker ?: return
         val id = currentRequest
         if (id <= 0) return
@@ -77,14 +80,10 @@ class SapiDroidService : TextToSpeechService() {
             } catch (e: InterruptedException) {
                 return@Thread
             }
-            val done = try {
-                worker.finished(id)
+            try {
+                worker.retireIfStuck(id)
             } catch (t: Throwable) {
-                false
-            }
-            if (!done) {
-                Log.w(TAG, "engine still busy after stop: retiring worker")
-                SapiDroidWorkers.retire(worker)
+                Log.w(TAG, "worker retirement check failed", t)
             }
         }.apply { name = "sapidroid-retire-check" }.start()
     }
@@ -93,7 +92,12 @@ class SapiDroidService : TextToSpeechService() {
     // Voices and languages
     // ------------------------------------------------------------------
 
-    override fun onGetVoices(): MutableList<Voice> = VoiceCatalog.installed(this).map { info ->
+    private fun installedVoices(): List<VoiceCatalog.Info> {
+        DeviceStorage.migrateIfNeeded(this)
+        return VoiceCatalog.installed(this)
+    }
+
+    override fun onGetVoices(): MutableList<Voice> = installedVoices().map { info ->
         Voice(
             info.label,
             info.locale,
@@ -102,11 +106,16 @@ class SapiDroidService : TextToSpeechService() {
             false,
             emptySet<String>()
         )
-    }.toMutableList()
+    }.toMutableList().apply {
+        if (isEmpty() && fallback.available()) add(fallback.voice)
+    }
 
     override fun onIsValidVoiceName(voiceName: String?): Int {
+        if (voiceName == FallbackSpeech.VOICE_NAME) {
+            return if (fallback.available()) TextToSpeech.SUCCESS else TextToSpeech.ERROR
+        }
         val info = VoiceCatalog.infoFor(voiceName) ?: return TextToSpeech.ERROR
-        return if (VoiceCatalog.installed(this).any { it.label == info.label }) {
+        return if (installedVoices().any { it.label == info.label }) {
             TextToSpeech.SUCCESS
         } else {
             TextToSpeech.ERROR
@@ -115,7 +124,8 @@ class SapiDroidService : TextToSpeechService() {
 
     override fun onLoadVoice(voiceName: String?): Int {
         val result = onIsValidVoiceName(voiceName)
-        if (result == TextToSpeech.SUCCESS && voiceName != null && !rateCache.containsKey(voiceName)) {
+        if (result == TextToSpeech.SUCCESS && voiceName != null &&
+            voiceName != FallbackSpeech.VOICE_NAME && !rateCache.containsKey(voiceName)) {
             // Warm the newly selected voice off this binder thread: pre-open
             // its handle and sample rate on the worker, so the next
             // utterance with it pays no file-load hitch and speaks at once.
@@ -142,6 +152,7 @@ class SapiDroidService : TextToSpeechService() {
         when {
             lang == null -> TextToSpeech.LANG_NOT_SUPPORTED
             !lang.startsWith("en", ignoreCase = true) -> TextToSpeech.LANG_NOT_SUPPORTED
+            installedVoices().isEmpty() && !fallback.available() -> TextToSpeech.LANG_MISSING_DATA
             country.equals("US", ignoreCase = true) || country.equals("USA", ignoreCase = true) ->
                 TextToSpeech.LANG_COUNTRY_AVAILABLE
             country.isNullOrEmpty() -> TextToSpeech.LANG_AVAILABLE
@@ -152,14 +163,14 @@ class SapiDroidService : TextToSpeechService() {
         onIsLanguageAvailable(lang, country, variant)
 
     override fun onGetDefaultVoiceNameFor(lang: String?, country: String?, variant: String?): String {
-        val installed = VoiceCatalog.installed(this)
+        val installed = installedVoices()
         // An empty name is the platform's "no default"; it must not name a
         // voice that onIsValidVoiceName would then refuse.
-        if (installed.isEmpty()) return ""
+        if (installed.isEmpty()) return if (fallback.available()) FallbackSpeech.VOICE_NAME else ""
         // The app's picker wins over the locale: every voice this engine has
         // shares the en-US frontend table, and a screen reader only sets a
         // language, so otherwise David would always speak.
-        val name = VoiceCatalog.savedVoice(this)?.label
+        val name = VoiceCatalog.savedVoice(this, installed)?.label
             ?: VoiceCatalog.forLocale(lang, country, installed).label
         Log.i(TAG, "default voice for $lang-$country: $name")
         return name
@@ -171,6 +182,11 @@ class SapiDroidService : TextToSpeechService() {
 
     override fun onSynthesizeText(request: SynthesisRequest?, callback: SynthesisCallback?) {
         if (request == null || callback == null) return
+        if (request.params.getBoolean(FallbackSpeech.PARAM_DELEGATED, false)) {
+            Log.e(TAG, "refusing recursive fallback synthesis")
+            callback.error()
+            return
+        }
         stopped.set(false)
         try {
             synthesize(request, callback)
@@ -187,16 +203,23 @@ class SapiDroidService : TextToSpeechService() {
     private fun synthesize(request: SynthesisRequest, callback: SynthesisCallback) {
         val text = request.charSequenceText?.toString()?.trim().orEmpty()
         if (text.isEmpty()) {
+            callback.start(VoiceCatalog.SAMPLE_RATE, android.media.AudioFormat.ENCODING_PCM_16BIT, 1)
             callback.done()
             return
         }
 
-        val info = VoiceCatalog.infoFor(request.voiceName)
-            ?: VoiceCatalog.savedVoice(this)
-            ?: VoiceCatalog.forLocale(request.language, request.country, VoiceCatalog.installed(this))
-        val voice = info.label
         val ratePercent = request.speechRate.takeIf { it > 0 } ?: 100
         val pitchPercent = request.pitch.takeIf { it > 0 } ?: 100
+        val installed = installedVoices()
+        val saved = VoiceCatalog.savedVoice(this, installed)
+        val info = VoiceCatalog.resolveForSynthesis(
+            installed, saved, request.voiceName, request.language, request.country
+        )
+        if (info == null) {
+            if (!fallback.speak(text, ratePercent, pitchPercent, callback) && !stopped.get()) callback.error()
+            return
+        }
+        val voice = info.label
 
         Log.i(TAG, "synth start voice=$voice requested=${request.voiceName} " +
             "engine=${info.engine} chars=${text.length} rate=$ratePercent pitch=$pitchPercent")
@@ -219,9 +242,14 @@ class SapiDroidService : TextToSpeechService() {
         val rateHz = rateCache[voice] ?: try {
             worker?.sampleRate(voice) ?: 0
         } catch (t: Throwable) {
+            Log.w(TAG, "voice sample-rate lookup failed", t)
             0
         }.takeIf { it > 0 }?.also { rateCache[voice] = it }
-            ?: VoiceCatalog.SAMPLE_RATE
+        if (rateHz == null) {
+            Log.e(TAG, "voice $voice could not be opened; trying fallback")
+            if (!fallback.speak(text, ratePercent, pitchPercent, callback) && !stopped.get()) callback.error()
+            return
+        }
 
         val ok = try {
             speak(worker!!, voice, ratePercent, pitchPercent, text, callback, rateHz)
@@ -258,11 +286,12 @@ class SapiDroidService : TextToSpeechService() {
     ): Boolean {
         var worker = startWorker
         var replaced = false
+        val delivered = AtomicBoolean(false)
         while (true) {
             try {
-                return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz)
+                return speakOnce(worker, voice, ratePercent, pitchPercent, text, callback, rateHz, delivered)
             } catch (e: WorkerGone) {
-                if (replaced || stopped.get()) return false
+                if (!mayRetryWorker(replaced, stopped.get(), delivered.get())) return false
                 replaced = true
                 Log.w(TAG, "replacing engine worker: ${e.message}")
                 worker = SapiDroidWorkers.replace(this, worker)
@@ -280,7 +309,8 @@ class SapiDroidService : TextToSpeechService() {
         pitchPercent: Int,
         text: String,
         callback: SynthesisCallback,
-        rateHz: Int
+        rateHz: Int,
+        delivered: AtomicBoolean
     ): Boolean {
         val id = try {
             worker.say(voice, ratePercent, pitchPercent, text, SAY_WAIT_MS)
@@ -318,7 +348,11 @@ class SapiDroidService : TextToSpeechService() {
         var started = false
         var frames = 0L
         try {
-            val maxBuf = callback.maxBufferSize.coerceAtLeast(1024)
+            val maxBuf = callback.maxBufferSize
+            if (maxBuf <= 0) {
+                worker.cancel(requestId)
+                return false
+            }
             while (true) {
                 if (stopped.get()) {
                     try {
@@ -336,7 +370,11 @@ class SapiDroidService : TextToSpeechService() {
                 }
                 if (block != null && block.isNotEmpty()) {
                     if (!started) {
-                        callback.start(rateHz, android.media.AudioFormat.ENCODING_PCM_16BIT, 1)
+                        if (callback.start(rateHz, android.media.AudioFormat.ENCODING_PCM_16BIT, 1) != TextToSpeech.SUCCESS) {
+                            worker.cancel(requestId)
+                            return false
+                        }
+                        delivered.set(true)
                         started = true
                     }
                     var off = 0
@@ -349,15 +387,21 @@ class SapiDroidService : TextToSpeechService() {
                             }
                             return false
                         }
-                        val n = minOf(maxBuf, block.size - off).coerceAtLeast(2)
-                        if (callback.audioAvailable(block, off, n) != TextToSpeech.SUCCESS) break
+                        val n = minOf(maxBuf, block.size - off)
+                        if (callback.audioAvailable(block, off, n) != TextToSpeech.SUCCESS) {
+                            worker.cancel(requestId)
+                            return false
+                        }
                         off += n
                     }
                     frames += block.size / 2L
                     continue
                 }
                 try {
-                    if (worker.finished(requestId)) break
+                    if (worker.finished(requestId)) {
+                        if (worker.failed(requestId)) return false
+                        break
+                    }
                 } catch (t: Throwable) {
                     SapiDroidWorkers.retire(worker)
                     throw WorkerGone("finished failed", t)

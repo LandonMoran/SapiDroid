@@ -26,6 +26,21 @@ output:
 The voice files belong to Microsoft and are not in this repository. SapiDroid
 reads them from its own private folders.
 
+When no SapiDroid voice is installed or a voice cannot open, the engine tries
+another installed Android TTS engine. This requires another working engine and
+its voice data; it may not be available before first unlock. If none is
+available, synthesis reports an error instead of silently claiming success.
+
+Before uninstalling SapiDroid, select and test another TTS engine in Android's
+text-to-speech settings. Android controls the system default after an engine is
+removed; SapiDroid cannot switch it after uninstall. Uninstalling also deletes
+the app's voice files. An update signed with a different key requires an
+uninstall, so use the same precaution for such updates.
+
+The voice selected in SapiDroid applies to the next utterance, even if a screen
+reader continues to request its previously cached voice. This app-level choice
+takes precedence over a client's requested SapiDroid voice.
+
 ### SAPI 4
 
 `files/sapi4`: `msttssyn.dll` (Speech Build 4.0.4.2512, 851456 bytes, SHA-256

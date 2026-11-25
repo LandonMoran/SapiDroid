@@ -94,18 +94,18 @@ object VoiceCatalog {
     /** Device-protected storage, so the default voice survives Direct Boot. */
     private fun storage(context: Context): Context = DeviceStorage.context(context)
 
-    fun savedVoice(context: Context): Info? {
+    fun savedVoice(context: Context, voices: List<Info> = installed(context)): Info? {
         // In-memory cache first: the picker's choice is visible to the next
         // utterance in this process without waiting on disk I/O.
         val store = storage(context)
-        if (!defaultCacheValid) {
+        if (!defaultCacheValid || cachedDefaultLabel == null) {
             cachedDefaultLabel = store.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_DEFAULT_VOICE, null)
             defaultCacheValid = true
         }
         val label = cachedDefaultLabel ?: return null
         val info = infoFor(label) ?: return null
-        return if (installed(context).any { it.label == info.label }) info else null
+        return if (voices.any { it.label == info.label }) info else null
     }
 
     /**
@@ -135,18 +135,24 @@ object VoiceCatalog {
 
         val shared = java.io.File(oneCore, SappleVoices.SHARED_DATA)
             .let { it.isFile && it.length() > 0 }
-        val sapi4Ready = listOf("msttssyn.dll", "sam.vce", "male.vce", "female.vce")
+        val sapi4Ready = listOf("msttssyn.dll", "sam.vce", "male.vce", "female.vce",
+            "sam.cfg", "male.cfg", "female.cfg")
             .all { java.io.File(sapi4, it).isFile }
-        val sapi5Ready = sapi5Files.all { java.io.File(sapi5, it).isFile }
-        val annaReady = java.io.File(anna, "M1033DSK.CSD").isFile
+        val sapi5Ready = listOf("LTTS1033.LXA", "r1033tts.LXA").all { java.io.File(sapi5, it).isFile }
+        val annaReady = listOf("CSD", "IDX", "UNT", "CRT", "APL", "UDT", "TTS", "LTS", "WIH", "KEY", "HAN")
+            .all { java.io.File(anna, "M1033DSK.$it").isFile }
 
         return all.filter { info ->
             when (info.engine) {
                 Engine.ONECORE ->
-                    shared && java.io.File(oneCore, "M1033${info.name}.APM").isFile
+                    shared && listOf("APM", "INI").all {
+                        java.io.File(oneCore, "M1033${info.name}.$it").isFile
+                    }
                 Engine.ANNA -> annaReady
                 Engine.SAPI4 -> sapi4Ready
-                Engine.SAPI5 -> sapi5Ready
+                Engine.SAPI5 -> sapi5Ready && listOf("spd", "sdf").all {
+                    java.io.File(sapi5, "${info.name.removeSuffix("5")}.$it").isFile
+                }
             }
         }
     }
@@ -159,6 +165,16 @@ object VoiceCatalog {
             .removeSuffix(" (SAPI 4)")
             .removeSuffix(" (OneCore)")
         return all.firstOrNull { it.name.equals(bare, ignoreCase = true) }
+    }
+
+    internal fun resolveForSynthesis(
+        voices: List<Info>, saved: Info?, requested: String?, lang: String?, country: String?
+    ): Info? {
+        if (voices.isEmpty()) return null
+        saved?.takeIf { it in voices }?.let { return it }
+        if (requested == FallbackSpeech.VOICE_NAME) return null
+        infoFor(requested)?.takeIf { it in voices }?.let { return it }
+        return forLocale(lang, country, voices)
     }
 
     /**

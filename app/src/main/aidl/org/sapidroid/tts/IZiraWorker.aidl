@@ -24,8 +24,14 @@ interface IZiraWorker {
     /** True once [requestId] has completed, or the engine failed. */
     boolean finished(int requestId);
 
+    /** True when synthesis failed for this request. */
+    boolean failed(int requestId);
+
     /** Asks the engine to stop.  Never interrupts the thread inside it. */
     void cancel(int requestId);
+
+    /** Retires the process only if this cancelled request is still running. */
+    void retireIfStuck(int requestId);
 
     /** Kills this worker process.  Only the owner may call this. */
     void shutdown();
