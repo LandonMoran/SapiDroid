@@ -220,6 +220,12 @@ the median, but a single-kernel change still needs a dedicated before/after buil
 - The host numbers come from x86-64 GCC; the app is Clang for ARM. They compare code fairly, they
   are not device timings.
 
+The OneCore frontend has its own benchmark, because it needs a sentence rather than a voice pack:
+`bench/zf2_bench.c` builds a synthetic word/syllable/phone tree, runs `zf2_features` over it and
+prints ns per phone. Its output is *not* compared with the original: this fork deliberately resolves
+`Phone.Syllable.Word.FwPosInIP`/`BwPosInSentence` against word indices (the decomp read a phrase
+index as a word index) and maps phone ids for the en-GB/en-AU sets, so the columns differ by design.
+
 ## Gotchas
 
 - **Voice data is not source.** Never commit `.vce`, `.spd`, `M1033*` files or
