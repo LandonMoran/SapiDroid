@@ -484,6 +484,26 @@ int zb_ini_load(ZbVoice *v, const char *path)
     return 0;
 }
 
+/* ---- which English phone database the models were trained with (zb.h) ----
+ * The APM's phone-identity questions list the ids of the database the voice was trained on. Ids 25 (IY), 48 (Z)
+ * and 49 (ZH) only exist in the en-GB/en-AU database, so a voice that asks about one of them is in that set;
+ * every en-US model asks about 3 and 7..47 instead. */
+int zb_voice_phone_set(const ZbVoice *v)
+{
+    int i, k;
+    if (!v || !v->q) return ZB_PHONES_EN_US;
+    for (i = 0; i < v->nq; i++) {
+        const ZbQuestion *q = &v->q[i];
+        if (q->feat != ZB_F_PhoneIdentity && q->feat != ZB_F_NextPhoneIdentity &&
+            q->feat != ZB_F_PrevPhoneIdentity && q->feat != ZB_F_NextNextPhoneIdentity &&
+            q->feat != ZB_F_PrevPrevPhoneIdentity)
+            continue;
+        for (k = 0; k < q->nval; k++)
+            if (q->val[k] == 25 || q->val[k] == 48 || q->val[k] == 49) return ZB_PHONES_EN_GB;
+    }
+    return ZB_PHONES_EN_US;
+}
+
 /* ---- emotion recipes (zb.h) ---- */
 const char *zb_emotion_name(const ZbVoice *v, int i)
 {

@@ -185,6 +185,22 @@ purpose: the output is bit-exact against Microsoft's engine only when the
 compiler is not allowed to fuse floating-point operations. Do not relax those
 flags to chase speed.
 
+Microsoft shipped two English phone databases, and the voices' acoustic models
+name phones by their id in the one they were trained on. The frontend always
+reads the en-US `MSTTSLocEnUS.dat`, so its ids are en-US: `AA` is 7 and the set
+runs 7..47. The en-GB and en-AU voices (George, Susan, Hazel, Sarah, James,
+Matilda, Catherine) were trained on the other database, where `AA` is 6, the
+range is 6..49, and `AR`, `IR`, `O`, `OO`, `UR` and `J` exist. The two also
+number the stress and pause phones differently. `zb_voice_phone_set` tells which
+database a voice's APM questions use (from the question values themselves, so a
+voice is classified by its data, not its name) and `z2_phone_local` translates
+each phoneme identity before the model is asked. Without that translation every
+phone is looked up as the phone with the same number in the other database, and
+the en-GB/en-AU voices are unintelligible. en-US, en-CA and en-IN voices use the
+en-US numbering and are not translated. The three en-US phones with no
+counterpart there map to their GB spelling: `-SP-` to `-SIL-`, `AO` to `OO`
+("thought" = TH OO T) and `Y` to `J` ("yes" = J EH S).
+
 ## Where to change what
 
 - **A new voice on an existing engine** — add it to `VoiceCatalog` (and to

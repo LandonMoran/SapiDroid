@@ -204,7 +204,7 @@ static int get_phone(const Z2Sent *s, int i, int prop, zf2_value *v)
     const Z2S *y = &s->s[p->syl];
     int wi = y->word;
     switch (prop) {
-    case P_PhoneIdentity: return INT(v, p->id);
+    case P_PhoneIdentity: return INT(v, z2_phone_local(p->id, s->v->phone_set));
     case P_FwPosInSyllable: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, i - y->p0 + 1);
     case P_BwPosInSyllable: if (z2_phone_is_sil(s, p->id)) return NUL(v); return INT(v, y->p0 + y->np - i);
     case P_FwPosInWord: {

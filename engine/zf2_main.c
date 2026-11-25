@@ -109,6 +109,7 @@ zf2_voice *zf2_voice_load(const char *voicepath)
     return v;
 }
 void zf2_voice_free(zf2_voice *v) { free(v); }
+void zf2_voice_set_phone_set(zf2_voice *v, int phone_set) { if (v) v->phone_set = phone_set; }
 
 /* ---- conversion ---- */
 static int zlen(const zf_char *s) { int n = 0; if (s) while (s[n]) n++; return n; }

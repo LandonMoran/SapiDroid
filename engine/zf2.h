@@ -31,6 +31,10 @@ typedef struct zf2_voice zf2_voice;
 zf2_voice *zf2_voice_load(const char *voicepath);
 void zf2_voice_free(zf2_voice *v);
 
+/* ZB_PHONES_*: the phone database the voice's acoustic models were trained with (zb_voice_phone_set). The frontend
+ * works in en-US ids; this translates the phoneme identities the models are asked about. */
+void zf2_voice_set_phone_set(zf2_voice *v, int phone_set);
+
 /* ---- SAPI events produced for one sentence (audio offsets are filled by the backend from durations) ---- */
 enum { ZF2_EV_WORD = 5, ZF2_EV_PHONEME = 6, ZF2_EV_SENTENCE = 7, ZF2_EV_VISEME = 8, ZF2_EV_BOOKMARK = 4 };
 typedef struct {

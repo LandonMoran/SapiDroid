@@ -210,6 +210,15 @@ ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen);
 void zb_voice_free(ZbVoice *v);
 int zb_voice_is_int(const ZbVoice *v);     /* 0 = float path (David), 1 = fixed-point path (Zira, Mark) */
 
+/* Which English phone database a voice's acoustic models were trained with. Microsoft numbers the phones
+differently in the en-US/en-IN database and in the one the en-GB and en-AU voices use: AA is 7 in the first and
+6 in the second, the second has phones the first does not (AR, IR, O, OO, UR, J), and its stress and pause ids
+shift too. The frontend always produces the en-US numbering, so the phoneme identities are translated for the
+second set before they reach the models. */
+enum { ZB_PHONES_EN_US = 0, ZB_PHONES_EN_GB = 1 };
+/* Read from the voice's own phone-identity questions, so a voice is classified by its data, not by its name. */
+int zb_voice_phone_set(const ZbVoice *v);
+
 /* PCM sink: 16 kHz mono int16. Return 0 to continue. */
 typedef int (*zb_write_fn)(void *user, const short *pcm, int nsamples);
 

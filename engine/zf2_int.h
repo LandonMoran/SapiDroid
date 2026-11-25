@@ -15,6 +15,8 @@
 extern const char *const z2_phone_name[Z2_MAXPH];
 extern const uint32_t z2_phone_flags[Z2_MAXPH];
 int z2_phone_id(const char *name, int len);       /* -1 unknown */
+/* en-US phone id -> the id of the same phone in the voice's own database (ZB_PHONES_*, see zb.h) */
+int z2_phone_local(int id, int phone_set);
 
 /* pause classes (index into the SilenceLength table 0x180170f00) */
 enum { Z2_PC_WORD, Z2_PC_INTERM, Z2_PC_PUNCINTERM, Z2_PC_NONPUNCIP, Z2_PC_PARALIP, Z2_PC_PARALLISTIP, Z2_PC_IP, Z2_PC_SENT };
@@ -30,6 +32,7 @@ struct zf2_voice {
     /* unit generator / SAPI */
     int normal_factor;      /* VoiceSetting.MSTTS_SpeakRate_NormalFactor */
     int phoneme_events_native; /* VoiceSetting.TtsPhonemeEvents */
+    int phone_set;          /* ZB_PHONES_* the acoustic models use (zf2_voice_set_phone_set) */
     char name[64];
 };
 

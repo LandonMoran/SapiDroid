@@ -72,6 +72,10 @@ zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size
         if (err) snprintf(err, errlen, "cannot load %s.INI or %s", vpath, dat);
         goto fail;
     }
+    /* The voice's models were trained on Microsoft's own phone numbering, which for the en-GB/en-AU voices is
+     * not the en-US one the frontend speaks; translate it so every phone is asked about the model that was
+     * trained for it. */
+    zf2_voice_set_phone_set(t->vf, zb_voice_phone_set(t->vb));
     return t;
 fail:
     zira_tts_close(t);

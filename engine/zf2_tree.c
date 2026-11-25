@@ -26,6 +26,28 @@ int z2_phone_id(const char *name, int len)
         if ((int)strlen(z2_phone_name[i]) == len && len && !strncmp(z2_phone_name[i], name, (size_t)len)) return i;
     return -1;
 }
+
+/* The en-GB/en-AU phone database (MSTTSLocEnGB.dat / MSTTSLocEnAU.dat resource 29a5584b), indexed by the en-US
+ * id above. Its ids are: 1 &, 2 -, 3 -SIL-, 4 1, 5 2, 6 AA, 7 AE, 8 AH, 9 AR, 10 AW, 11 AX, 12 AY, 13 B, 14 CH,
+ * 15 D, 16 DH, 17 EH, 18 ER, 19 EY, 20 F, 21 G, 22 H, 23 IH, 24 IR, 25 IY, 26 J, 27 JH, 28 K, 29 L, 30 M, 31 N,
+ * 32 NG, 33 O, 34 OO, 35 OW, 36 OY, 37 P, 38 R, 39 S, 40 SH, 41 T, 42 TH, 43 UH, 44 UR, 45 UW, 46 V, 47 W,
+ * 48 Z, 49 ZH.
+ *
+ * The en-US voice's -SP- and stress markers keep their own meaning through pauses and stress classes (the zf2
+ * tree is in en-US ids throughout); only the phoneme the model is asked about is translated. -SP- (4) has no
+ * counterpart there, so it becomes -SIL- (3). AO and Y are en-US-only: the GB lexicon writes those sounds as OO
+ * ("thought" = TH OO T) and J ("yes" = J EH S), so they map there. */
+static const uint8_t gb_id_from_us[48] = {
+    0, 1, 2, 3, 3, 4, 5, 6, 7, 8, 34, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 25, 27,
+    28, 29, 30, 31, 32, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 46, 47, 26, 48, 49
+};
+
+int z2_phone_local(int id, int phone_set)
+{
+    if (phone_set != ZB_PHONES_EN_GB || id < 0 || id >= (int)(sizeof gb_id_from_us / sizeof gb_id_from_us[0]))
+        return id;
+    return gb_id_from_us[id] ? gb_id_from_us[id] : id;
+}
 static uint32_t pflags(int id) { return id > 0 && id < Z2_MAXPH ? z2_phone_flags[id] : 0; }
 
 /* ---- word predicates ---- */
