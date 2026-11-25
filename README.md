@@ -279,6 +279,12 @@ The build needs a JDK, the Android SDK, and the NDK and CMake versions
    than waiting for each text chunk to finish. OneCore still synthesizes a
    sentence before its first audio callback.
 
+   To measure engine-side first-audio latency on a device, enable debug logging
+   with `adb shell setprop log.tag.SapiDroid DEBUG` and inspect
+   `adb logcat -s SapiDroid:D` for `first audio callback` and `latency_ms`. This
+   measures from the engine receiving an utterance until it sends its first
+   audio, not the TalkBack swipe or the speaker's playback delay.
+
 On Linux or macOS, run `./gradlew :app:assembleDebug` instead.
 
 ## Natural voices
