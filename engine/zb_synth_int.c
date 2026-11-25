@@ -276,7 +276,7 @@ typedef struct {
     int *dur, *stretch, *pstart;   /* pstart[p] = first frame of phone p (nph+1 entries) */
 } ZbIUtt;
 
-static int ilookup(ZbVoice *v, const ZbUtt *u, ZbIUtt *um)
+static int ilookup(ZbVoice *v, const ZbUtt *u, ZbIUtt *um, const volatile int *cancel)
 {
     int p, s;
     const int ns = v->m_lf0->nstate, P = v->m_lsf->streamdim[0] / 3;
@@ -287,6 +287,7 @@ static int ilookup(ZbVoice *v, const ZbUtt *u, ZbIUtt *um)
     um->gf0 = (ZbIG *)calloc((size_t)u->nphone * ns, sizeof(ZbIG));
     um->glsf = (ZbIG *)calloc((size_t)u->nphone * ns, sizeof(ZbIG));
     for (p = 0; p < u->nphone; p++) {
+        if (cancel && zb_cancel_load(cancel)) return 1;
         const int *f = u->ph[p].f;
         int id = f[ZB_F_PhoneIdentity];
         const uint8_t *leaf = zb_tree_leaf(v, v->m_dur, id, 0, f);
@@ -297,15 +298,20 @@ static int ilookup(ZbVoice *v, const ZbUtt *u, ZbIUtt *um)
         }
         for (s = 0; s < ns; s++) {
             const uint8_t *e;
+            uint32_t off;
             ZbIG *g = &um->gf0[p * ns + s];
             leaf = zb_tree_leaf(v, v->m_lf0, id, s, f);
             if (!leaf) return -1;
-            e = v->m_lf0->pool + rd32(leaf + 4);          /* {f32 w, i16 m[3], u8 p[3], pad} */
+            off = rd32(leaf + 4);
+            if ((uint64_t)off + 13 > v->m_lf0->poolsize) return -1;
+            e = v->m_lf0->pool + off;                    /* {f32 w, i16 m[3], u8 p[3], pad} */
             g->w = (short)(int)(rdf(e) * 16384.0f + 0.5f);
             idecode(g, e + 4, e + 10, 2, 3, 1, 1);
             leaf = zb_tree_leaf(v, v->m_lsf, id, s, f);
             if (!leaf) return -1;
-            e = v->m_lsf->pool + rd32(leaf + 4);          /* 3P+3 bytes of means, then precisions */
+            off = rd32(leaf + 4);
+            if (P <= 0 || P > IMAXDIM / 3 || (uint64_t)off + 6 * (uint64_t)P + 3 > v->m_lsf->poolsize) return -1;
+            e = v->m_lsf->pool + off;                    /* 3P+3 bytes of means, then precisions */
             idecode(&um->glsf[p * ns + s], e, e + (3 * P + 3), 1, 3 * P, P, 0);
         }
     }
@@ -378,7 +384,8 @@ static int lsf_chunk(const ZbVoice *v, const ZbIUtt *um, int start, int *overlap
     return cnt;
 }
 
-int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace)
+int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user,
+                 ZbTrace *trace, const volatile int *cancel)
 {
     ZbIUtt um;
     int ns, nst, T = 0, k, t, p, nv, rc = -1, start, ov, *phfr = NULL, *blk = NULL, nblk = 0, cap = 0;
@@ -387,9 +394,11 @@ int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn wri
     ZbIG **fr = NULL, *pool = NULL;
     short *pcm = NULL, *wav = NULL;
     long nwav = 0;
+    int vocoder_started = 0;
     const int order = v->m_lsf->streamdim[0] / 3 - 1;
     memset(&um, 0, sizeof um);
-    if (ilookup(v, u, &um)) goto done;
+    k = ilookup(v, u, &um, cancel);
+    if (k) { if (k > 0) rc = 1; goto done; }
     ns = um.nst;
     nst = u->nphone * ns;
     um.dur = (int *)calloc((size_t)nst, sizeof(int));
@@ -412,6 +421,7 @@ int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn wri
     lf0 = (int32_t *)calloc((size_t)T + 1, sizeof(int32_t));
     f0c = (int32_t *)calloc((size_t)T + 1, sizeof(int32_t));
     nv = build_iframes(v->m_lf0, um.gf0, um.dur, nst, T, vuv, 1, fr, pool);
+    if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
     imlpg(v->m_lf0, fr, nv, 1, 2, f0c);
     for (t = 0, k = 0; t < T; t++) lf0[t] = vuv[t] ? f0c[k++] : 0;
     if (v->m_lf0->has_gen) {
@@ -502,13 +512,16 @@ int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn wri
         if (cap < phfr[p]) cap = phfr[p];
     }
     for (start = 0, ov = 0; start < u->nphone;) {
+        if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
         int cnt = lsf_chunk(v, &um, start, &ov, lsf, gain), a = um.pstart[start], b = um.pstart[start + cnt];
+        if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
         if (trace) {
             memcpy(trace->ilsf + (size_t)a * order, lsf + (size_t)a * order, sizeof(int) * (size_t)(b - a) * order);
             memcpy(trace->igain + a, gain + a, sizeof(int) * (size_t)(b - a));
         }
         {
             int nb = zb_split_blocks(u, phfr, start, cnt, um.stretch, cap, blk + nblk);
+            vocoder_started = 1;
             zb_vocoder_int_chunk(v, u, phfr + start, blk + nblk, nb, start == 0, start + cnt >= u->nphone, lf0, lsf, gain, a,
                                  b - a, pcm);
             nblk += nb;
@@ -516,6 +529,8 @@ int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn wri
         start += cnt;
     }
     zb_vocoder_int_reset(v);
+    vocoder_started = 0;
+    if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
     if (getenv("ZB_DUMP_ILSF")) {   /* debug: LSF/gain as vocoded (after edge copy, sharpening, repair) */
         FILE *df = fopen(getenv("ZB_DUMP_ILSF"), "ab");
         if (df) { fwrite(&T, 4, 1, df); fwrite(lsf, 4, (size_t)T * order, df); fwrite(gain, 4, (size_t)T, df); fclose(df); }
@@ -525,6 +540,7 @@ int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn wri
     rc = 0;
     if (write && nwav) rc = write(user, wav, (int)nwav);
 done:
+    if (vocoder_started) zb_vocoder_int_reset(v);
     free(um.gdur); free(um.gpdur); free(um.gf0); free(um.glsf); free(um.dur); free(um.stretch); free(um.pstart);
     free(vuv); free(lf0); free(f0c); free(lsf); free(gain); free(fr); free(pool); free(pcm); free(wav); free(phfr); free(blk);
     return rc;

@@ -285,15 +285,15 @@ static int get_word(const Z2Sent *s, int i, int prop, zf2_value *v)
     case P_FwPosInIP: case P_BwPosInIP: {
         int ip;
         if (w->phrase < 0 || (ip = s->ph[w->phrase].ip) < 0) return NUL(v);
-        if (prop == P_FwPosInIP) return INT(v, rw_between(s, s->ip[ip].ph0, i));
-        return INT(v, rw_between(s, i, s->ip[ip].ph1));
+        if (prop == P_FwPosInIP) return INT(v, rw_between(s, s->ph[s->ip[ip].ph0].w0, i));
+        return INT(v, rw_between(s, i, s->ph[s->ip[ip].ph1].w1));
     }
     case P_FwPosInSentence:
         if (s->first_ip < 0) return NUL(v);
-        return INT(v, rw_between(s, s->ip[s->first_ip].ph0, i));
+        return INT(v, rw_between(s, s->ph[s->ip[s->first_ip].ph0].w0, i));
     case P_BwPosInSentence:
         if (s->last_ip < 0) return NUL(v);
-        return INT(v, rw_between(s, i, s->ip[s->last_ip].ph1));
+        return INT(v, rw_between(s, i, s->ph[s->ip[s->last_ip].ph1].w1));
     case P_VowelLength: {
         int k, cls = 4;
         for (k = w->s0 + w->ns - 1; k >= w->s0 && k >= 0; k--) {
@@ -467,6 +467,8 @@ int zf2_nphones(const zf2_sent *s) { return s->np; }
 int zf2_eval_path(const zf2_sent *s, const char *path, zf2_value *vals)
 {
     Path p;
+    Node last = {0, -1};
+    zf2_value last_value;
     int i, k;
     if (parse_path(path, &p) || p.nstep < 1 || p.lv[0] != L_PHONE || p.dir[0] != 0) return -1;
     for (i = 0; i < s->np; i++) {
@@ -475,7 +477,13 @@ int zf2_eval_path(const zf2_sent *s, const char *path, zf2_value *vals)
         vals[i].value = -1;
         for (k = 1; k < p.nstep && x.i >= 0; k++) x = step(s, x, p.lv[k], p.dir[k], p.skip[k]);
         if (x.i < 0) continue;
-        if (get_value(s, x, p.prop, &vals[i]) < 0) return -1;
+        if (x.level == last.level && x.i == last.i) {
+            vals[i] = last_value;
+        } else {
+            if (get_value(s, x, p.prop, &vals[i]) < 0) return -1;
+            last = x;
+            last_value = vals[i];
+        }
     }
     return 0;
 }
@@ -483,9 +491,14 @@ int zf2_eval_path(const zf2_sent *s, const char *path, zf2_value *vals)
 int zf2_features(const zf2_sent *s, ZbUtt *u)
 {
     int f, i;
-    zf2_value *vals = (zf2_value *)malloc(sizeof(zf2_value) * (size_t)(s->np ? s->np : 1));
-    u->nphone = s->np;
+    zf2_value *vals;
+    u->nphone = 0;
+    u->ph = NULL;
+    vals = (zf2_value *)malloc(sizeof(zf2_value) * (size_t)(s->np ? s->np : 1));
+    if (!vals) return -1;
     u->ph = (ZbPhone *)calloc((size_t)(s->np ? s->np : 1), sizeof(ZbPhone));
+    if (!u->ph) { free(vals); return -1; }
+    u->nphone = s->np;
     for (f = 0; f < ZB_NFEAT; f++) {
         if (zf2_eval_path(s, zb_feature_path[f], vals)) {
             for (i = 0; i < s->np; i++) u->ph[i].f[f] = ZB_NULL;

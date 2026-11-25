@@ -33,6 +33,8 @@ int queue_is_full(Queue *q);                            // @0x636849ab thiscall:
 int queue_push(Queue *q, const QItem *it);              // @0x636849cd thiscall
 int queue_push_n(Queue *q, const QItem *its, uint32_t n);   // @0x63684a29 thiscall
 int queue_pop(Queue *q, QItem *out);                    // @0x63684aa1 thiscall
+// Move all records into the caller's buffer in FIFO order; leave the queue unchanged on failure.
+int queue_take_all(Queue *q, QItem *out, uint32_t capacity, uint32_t *count);
 // locked reads of the first field of three other objects (their critical sections at +0x58, +0x11c,
 // +0x2cc)
 uint32_t locked_get_58(void *obj);                      // @0x6368447a thiscall

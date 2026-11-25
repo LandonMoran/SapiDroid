@@ -8,7 +8,8 @@
 
 void zb_lsf_repair(float *lsf, int rows, int p);
 void zb_apply_sapi_volume(const ZbUtt *u, const int *dur, int nstate, int shift, int sitevol, short *pcm);
-int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace);
+int zb_synth_int(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user,
+                 ZbTrace *trace, const volatile int *cancel);
 
 ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen)
 {
@@ -130,7 +131,7 @@ typedef struct {
     int *dur;
 } ZbUttModels;
 
-static int lookup(ZbVoice *v, const ZbUtt *u, ZbUttModels *um)
+static int lookup(ZbVoice *v, const ZbUtt *u, ZbUttModels *um, const volatile int *cancel)
 {
     int p, s, k;
     const int ns = v->m_lf0->nstate;
@@ -142,6 +143,7 @@ static int lookup(ZbVoice *v, const ZbUtt *u, ZbUttModels *um)
     um->glsf = (ZbGauss *)calloc((size_t)u->nphone * ns, sizeof(ZbGauss));
     um->ggain = (ZbGauss *)calloc((size_t)u->nphone * ns, sizeof(ZbGauss));
     for (p = 0; p < u->nphone; p++) {
+        if (cancel && zb_cancel_load(cancel)) return 1;
         const int *f = u->ph[p].f;
         int id = f[ZB_F_PhoneIdentity];
         const uint8_t *leaf = zb_tree_leaf(v, v->m_dur, id, 0, f);
@@ -224,7 +226,8 @@ static void apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, co
     }
 }
 
-int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace)
+int zb_synth_cancelable(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user,
+                        ZbTrace *trace, const volatile int *cancel)
 {
     ZbUttModels um;
     int ns, nst, T = 0, k, t, nv, rc = -1;
@@ -235,9 +238,11 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
     int *stretch = NULL;
     long nwav = 0;
     const int D = 24;
-    if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace);
+    if (cancel && zb_cancel_load(cancel)) return 1;
+    if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace, cancel);
     memset(&um, 0, sizeof um);
-    if (lookup(v, u, &um)) goto done;
+    k = lookup(v, u, &um, cancel);
+    if (k) { if (k > 0) rc = 1; goto done; }
     ns = um.nst;
     nst = u->nphone * ns;
     um.dur = (int *)calloc((size_t)nst, sizeof(int));
@@ -256,6 +261,7 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
     lf0 = (float *)calloc((size_t)T + 1, sizeof(float));
     f0c = (float *)calloc((size_t)T + 1, sizeof(float));
     nv = build_frames(v->m_lf0, um.glf0, um.dur, nst, T, vuv, 1, fr, pool);
+    if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
     zb_mlpg_float(v->m_lf0, fr, nv, 1, f0c);
     for (t = 0, k = 0; t < T; t++) lf0[t] = vuv[t] ? f0c[k++] : 0.0f;
     if (v->m_lf0->has_gen) {
@@ -267,7 +273,9 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
     lsf = (float *)calloc((size_t)T * D + 1, sizeof(float));
     gain = (float *)calloc((size_t)T + 1, sizeof(float));
     k = build_frames(v->m_lsf, um.glsf, um.dur, nst, T, NULL, D, fr, pool);
+    if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
     zb_mlpg_float(v->m_lsf, fr, k, D, lsf);
+    if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
     k = build_frames(v->m_lsf, um.ggain, um.dur, nst, T, NULL, 1, fr, pool);
     zb_mlpg_float(v->m_lsf, fr, k, 1, gain);
     if (trace) {
@@ -288,8 +296,10 @@ int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, 
         trace->lsf_fin = (float *)malloc(sizeof(float) * (T * D + 1)); memcpy(trace->lsf_fin, lsf, sizeof(float) * T * D);
     }
     /* vocoder */
+    if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
     pcm = (short *)calloc((size_t)T * v->shift + 1, sizeof(short));
     zb_vocoder_float(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm);
+    if (cancel && zb_cancel_load(cancel)) { zb_srand(v, 0x406); rc = 1; goto done; }
     nwav = zb_wave_sps(v, u, sapi, um.dur, ns, stretch, NULL, 0, pcm, &wav);   /* rate stage, voice + SAPI volume */
     zb_srand(v, 0x406);   /* end-of-utterance vocoder reset (FUN_18011024c) */
     rc = 0;
@@ -298,4 +308,9 @@ done:
     free(um.gdur); free(um.gpdur); free(um.glf0); free(um.glsf); free(um.ggain); free(um.dur);
     free(w); free(vuv); free(lf0); free(f0c); free(lsf); free(gain); free(fr); free(pool); free(pcm); free(wav); free(stretch);
     return rc;
+}
+
+int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace)
+{
+    return zb_synth_cancelable(v, u, sapi, write, user, trace, NULL);
 }

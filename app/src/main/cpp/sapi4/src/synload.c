@@ -73,6 +73,10 @@ VocVoice *voc_header_load(void *stm) {
     uint32_t got;
     vc_stm_read(stm, &v->noise_len, 4, &got);
     GPSET(v->noise, voc_noise_make(v->noise_len));
+    if (!v->noise) {
+        vc_free(v);
+        return NULL;
+    }
     v->_40 = 0;
     vc_stm_read(stm, &v->order, 4, &got);
     vc_stm_read(stm, &v->n_lsf, 4, &got);
@@ -83,11 +87,18 @@ VocVoice *voc_header_load(void *stm) {
     float *sine = vc_malloc((size_t)(uint32_t)v->fft_n * 8);
     GPSET(v->sine, sine);
     if (!sine) {
+        vc_free(GP(void, v->noise));
         vc_free(v);
-        return v;       // (the original returns the freed block)
+        return NULL;
     }
     voc_sine_table(v->fft_n, sine);
     GPSET(v->window, voc_fade_window(v->fft_n));
+    if (!v->window) {
+        vc_free(sine);
+        vc_free(GP(void, v->noise));
+        vc_free(v);
+        return NULL;
+    }
     return v;
 }
 
@@ -100,7 +111,10 @@ Codebook *voc_codebook_load(void *stm) {
     uint32_t bytes = (uint32_t)(cb->count * cb->dim) * 4;
     float *d = vc_malloc(bytes);
     GPSET(cb->data, d);
-    if (!d) return NULL;
+    if (!d) {
+        vc_free(cb);
+        return NULL;
+    }
     vc_stm_read(stm, d, bytes, &got);
     return cb;
 }
@@ -188,7 +202,8 @@ int32_t voc_engine_init(VocEngine *v, uint8_t *qin, uint8_t *qout, int32_t mode,
     vc_stm_read(stm, hdr, 0x8f8, &got);
     vc_free(hdr);
     vc_com_release(stm);
-    vc_stg_open_stream(stg, DLLVAR(const uint16_t, 0x6371f594), &stm);      // L"Inventory"
+    if (vc_stg_open_stream(stg, DLLVAR(const uint16_t, 0x6371f594), &stm) < 0 || !stm)
+        return (int32_t)0x80004005;
     v->mode = mode;
     v->style = style;
     void *cs = DLLVAR(void, 0x63738ba8);
@@ -196,7 +211,13 @@ int32_t voc_engine_init(VocEngine *v, uint8_t *qin, uint8_t *qout, int32_t mode,
     ModeTable *mt = mode_table(mode);
     if (!mt->loaded) {
         if (no_load) return (int32_t)0x80004005;     // (the lock stays held and the stream open)
-        GPSET(mode_table(mode)->inv, voc_inventory_load(stm));
+        VocVoice *inv = voc_inventory_load(stm);
+        if (!inv) {
+            vc_LeaveCriticalSection(cs);
+            vc_com_release(stm);
+            return (int32_t)0x80004005;
+        }
+        GPSET(mt->inv, inv);
         mode_table(mode)->loaded = 1;
     }
     vc_LeaveCriticalSection(cs);

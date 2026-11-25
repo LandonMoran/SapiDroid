@@ -73,7 +73,11 @@ int zf1_enum_next(zf1_enum *en, const zf1_frags *fr, zf1_span *sp)
                 t2 = total + cons;
                 if (hard || rem > 499) done = 1;
                 pos += cons;
-                if (t2 > 500) { t2 -= cons; done = 1; pos = before; }
+                if (t2 > 500) {
+                    if (total == 0) { t2 = 500; pos = before + 500; }
+                    else { t2 -= cons; pos = before; }
+                    done = 1;
+                }
                 total = t2;
             }
             if (pos >= end) exhausted = 1;

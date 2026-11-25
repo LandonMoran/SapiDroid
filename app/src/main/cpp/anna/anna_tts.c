@@ -1,6 +1,7 @@
 /* Microsoft Anna text to speech: library interface (see anna_tts.h). */
 #include "anna_tts.h"
 #include "anna.h"
+#include "anna_internal.h"
 #include "anna_front.h"
 #include "anna_lex.h"
 
@@ -106,7 +107,10 @@ void anna_tts_close(anna_tts *t)
 void anna_tts_set_rate(anna_tts *t, int rate) { t->rate = rate < -10 ? -10 : rate > 18 ? 18 : rate; }
 void anna_tts_set_volume(anna_tts *t, int volume) { t->volume = volume < 0 ? 0 : volume > 100 ? 100 : volume; }
 void anna_tts_set_pitch(anna_tts *t, int pitch) { t->pitch = pitch < -10 ? -10 : pitch > 10 ? 10 : pitch; }
-void anna_tts_cancel(anna_tts *t) { t->cancel = 1; }
+void anna_tts_cancel(anna_tts *t)
+{
+    if (t) anna_cancel_set(&t->cancel, 1);
+}
 
 /* the normalizer's text positions are UTF-16 units of the input; map them back to UTF-8 byte offsets the same
  * way anna_norm_new decodes (invalid bytes are one Windows-1252 unit) */
@@ -209,7 +213,7 @@ static void on_pcm(const int16_t *pcm, size_t n, void *user)
     if (c->stopped) return;
     if (c->cb->audio && c->cb->audio(pcm, n, c->cb->user)) {
         c->stopped = 1;
-        c->t->cancel = 1;
+        anna_cancel_set(&c->t->cancel, 1);
     }
     c->base += n;
 }
@@ -221,13 +225,13 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
     anna_render_opts o;
     int rc = 0;
     memset(&c, 0, sizeof c);
-    t->cancel = 0;
+    anna_cancel_set(&t->cancel, 0);
     c.t = t;
     c.cb = cb;
     c.last_word = -1;
-    c.map = utf16_to_utf8_map(utf8, &c.nmap);
+    c.map = cb->event ? utf16_to_utf8_map(utf8, &c.nmap) : NULL;
     nm = anna_norm_new(utf8, (flags & ANNA_SPEAK_XML ? ANNA_NORM_XML : 0) | (flags & ANNA_SPEAK_PUNCTUATION ? ANNA_NORM_SPEAK_PUNC : 0));
-    if (!c.map || !nm) {
+    if ((cb->event && !c.map) || !nm) {
         free((void *)c.map);
         if (nm) anna_norm_free(nm);
         return -1;
@@ -238,10 +242,10 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
     o.sapi_volume = t->volume;
     o.pitch_offset = t->pitch;
     o.cancel = &t->cancel;
-    o.item_cb = on_item;
+    o.item_cb = cb->event ? on_item : NULL;
     o.user = &c;
     anna_mid_reset(t->mid); /* one Speak() */
-    while (!t->cancel) {
+    while (!anna_cancel_requested(&t->cancel)) {
         const anna_token *tok;
         int n, nw, nu, r = anna_norm_sentence(nm, &tok, &n);
         if (r == 0) break;
@@ -263,9 +267,9 @@ int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callback
                 break;
             }
         }
-        if (!t->cancel) emit_bookmarks(&c, c.base, -1); /* bookmarks after the last word */
+        if (!anna_cancel_requested(&t->cancel) && cb->event) emit_bookmarks(&c, c.base, -1); /* bookmarks after the last word */
     }
-    if (t->cancel || c.stopped) rc = rc < 0 ? rc : 1;
+    if (anna_cancel_requested(&t->cancel) || c.stopped) rc = rc < 0 ? rc : 1;
     else if (rc == 0 && cb->event) {
         anna_event e;
         memset(&e, 0, sizeof e);

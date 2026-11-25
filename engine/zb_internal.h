@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "zb.h"
+#include "zb_atomic.h"
 
 #define ZB_MAXWIN 3
 #define ZB_MAXDIM 75

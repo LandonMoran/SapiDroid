@@ -16,8 +16,8 @@ object NativeZira {
 
     @JvmStatic external fun setVolume(handle: Long, volume: Int)
 
-    /** Blocking; [cancel] from another thread stops it within one chunk. */
-    @JvmStatic external fun speak(handle: Long, text: String): ShortArray?
+    /** Blocking; [cancel] requests a stop from another thread. */
+    @JvmStatic external fun speak(handle: Long, text: String, sink: PcmSink): Int
 
     @JvmStatic external fun cancel(handle: Long)
 }

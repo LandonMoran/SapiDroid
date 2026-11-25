@@ -5,6 +5,21 @@
 #include "sam.h"
 #include "sam_lex.h"
 
+#if defined(__GNUC__) || defined(__clang__)
+static inline int sam_cancelled(const volatile int *cancel)
+{
+    return cancel && __atomic_load_n(cancel, __ATOMIC_RELAXED) != 0;
+}
+
+static inline void sam_cancel_set(volatile int *cancel, int value)
+{
+    __atomic_store_n(cancel, value, __ATOMIC_RELAXED);
+}
+#else
+static inline int sam_cancelled(const volatile int *cancel) { return cancel && *cancel != 0; }
+static inline void sam_cancel_set(volatile int *cancel, int value) { *cancel = value; }
+#endif
+
 struct sam_tts {
     sam_voice *voice;
     sam_lexicon *lex;
@@ -22,6 +37,7 @@ struct sam_tts {
     void *out_user;
     int16_t *pend;
     size_t npend, pcap;
+    int output_error;
     float transpose; /* sam_params.transpose, for sam_tts_sing */
     /* library hosting (sam_tts_speak_ex): options, running sample count, current sentence span */
     const sam_speak_opts *opts;

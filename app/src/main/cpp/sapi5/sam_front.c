@@ -1586,10 +1586,14 @@ static int finish_sentence(sam_tts *t, const sam_sentence *b, sam_pcm_cb cb, voi
 static void hold(const int16_t *pcm, size_t n, void *user)
 {
     sam_tts *t = user;
+    if (t->output_error) return;
     if (t->npend + n > t->pcap) {
         size_t cap = (t->npend + n) * 2 + 1024;
         int16_t *p = realloc(t->pend, sizeof(int16_t) * cap);
-        if (!p) return;
+        if (!p) {
+            t->output_error = 1;
+            return;
+        }
         t->pend = p;
         t->pcap = cap;
     }
@@ -1614,6 +1618,7 @@ int sam_tts_speak_pcm(sam_tts *t, const char *text, sam_pcm_cb cb, void *user)
 
 int sam_tts_speak_ex(sam_tts *t, const char *text, const sam_speak_opts *opts, sam_pcm_cb cb, void *user)
 {
+    if (!t || !text || !cb) return -1;
     sam_norm *nm = sam_norm_new(text);
     sam_sentence s = {0};
     int rc = 0, k = 0;
@@ -1621,11 +1626,12 @@ int sam_tts_speak_ex(sam_tts *t, const char *text, const sam_speak_opts *opts, s
     t->out_cb = cb;
     t->out_user = user;
     t->npend = 0;
+    t->output_error = 0;
     t->opts = opts;
     t->ev_total = 0;
     sam_synth_chunk_reset(t->synth);
     while (rc == 0 && (k = sam_norm_next(nm, t->lex, t->lts, &s)) > 0) {
-        if (opts && opts->cancel && *opts->cancel) {
+        if (opts && sam_cancelled(opts->cancel)) {
             rc = 1;
             break;
         }
@@ -1672,7 +1678,7 @@ static int speak_sentence(sam_tts *t, wordlist *l, sam_pcm_cb cb, void *user)
         const item *x = &il.it[k];
         sam_segment g;
         int j;
-        if (o && o->cancel && *o->cancel) {
+        if (o && sam_cancelled(o->cancel)) {
             rc = 1;
             break;
         }
@@ -1686,6 +1692,10 @@ static int speak_sentence(sam_tts *t, wordlist *l, sam_pcm_cb cb, void *user)
             m.audio_pos = t->ev_total;
             sent_done = 1;
             o->mark_cb(o->user, &m);
+        }
+        if (o && sam_cancelled(o->cancel)) {
+            rc = 1;
+            break;
         }
         g.hold = 0;
         g.unit = x->unit;
@@ -1702,6 +1712,7 @@ static int speak_sentence(sam_tts *t, wordlist *l, sam_pcm_cb cb, void *user)
             g.amp[j] = x->amp;
         }
         rc = sam_synth_segment(t->synth, &g, hold, t);
+        if (t->output_error) rc = -1;
         if (rc == 0) release(t, (size_t)sam_synth_chunk_pos(t->synth));
     }
     free(il.it);
@@ -1762,6 +1773,7 @@ int sam_tts_sing(sam_tts *t, const char *score, sam_pcm_cb cb, void *user)
     t->out_cb = cb;
     t->out_user = user;
     t->npend = 0;
+    t->output_error = 0;
     sam_synth_chunk_reset(t->synth);
     /* one line per word: "twin-kle C4 1 C4 1", "- 1" (rest), "tempo 120" */
     while (*p && rc == 0) {
@@ -1923,6 +1935,7 @@ int sam_tts_sing(sam_tts *t, const char *score, sam_pcm_cb cb, void *user)
                 g.amp[j] = x->amp;
             }
             rc = sam_synth_segment(t->synth, &g, hold, t);
+            if (t->output_error) rc = -1;
             if (rc == 0) release(t, (size_t)sam_synth_chunk_pos(t->synth));
         }
     }

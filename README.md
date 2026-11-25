@@ -150,7 +150,7 @@ voice picker offers them once their data is complete.
 
 ## How it is built
 
-- `app/src/main/cpp/` builds all three engines plus JNI bridges. The OneCore
+- `app/src/main/cpp/` builds all four engines plus JNI bridges. The OneCore
   engine is compiled with `-ffp-contract=off` and no fast math, which
   bit-exactness requires.
 - All engines share one private `:engine` process behind a binder, the same
@@ -270,10 +270,14 @@ The build needs a JDK, the Android SDK, and the NDK and CMake versions
    The picker on SapiDroid's own screen is the engine's default voice, and that
    is what screen readers use: TalkBack and its forks, such as Backtalk, have no
    voice list of their own. They set a language and take whatever voice the
-   engine names for it. A reader that is already running keeps the voice it
-   connected with, so restart Backtalk (or the phone) after changing the picker.
+   engine names for it. Changing the picker applies to the next utterance,
+   including when the screen reader is already running.
    Android's Text-to-speech screen also links here, through the settings
    shortcut beside SapiDroid's name.
+
+   Audio is delivered incrementally as the native engine produces it, rather
+   than waiting for each text chunk to finish. OneCore still synthesizes a
+   sentence before its first audio callback.
 
 On Linux or macOS, run `./gradlew :app:assembleDebug` instead.
 
@@ -287,6 +291,6 @@ grants it per account, and the voice packages come with the grant.
 
 ## Licence
 
-SapiDroid's own code: MIT. All three vendored engines are MIT and keep their
+SapiDroid's own code: MIT. All four vendored engines are MIT and keep their
 licences beside their sources. Voice data and Microsoft engine data are not
 distributed here.

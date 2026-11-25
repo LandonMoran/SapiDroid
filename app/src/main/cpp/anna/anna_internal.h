@@ -3,6 +3,16 @@
 
 #include "anna.h"
 
+static inline int anna_cancel_requested(volatile const int *cancel)
+{
+    return cancel && __atomic_load_n(cancel, __ATOMIC_RELAXED) != 0;
+}
+
+static inline void anna_cancel_set(volatile int *cancel, int value)
+{
+    __atomic_store_n(cancel, value, __ATOMIC_RELAXED);
+}
+
 typedef struct {
     unsigned char f[9]; /* candidate-side target features */
     unsigned char join; /* may continue its corpus predecessor */

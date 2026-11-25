@@ -1,6 +1,7 @@
 package org.sapidroid.tts
 
 import android.content.Context
+import java.io.File
 import java.util.Locale
 
 /**
@@ -94,7 +95,7 @@ object VoiceCatalog {
     /** Device-protected storage, so the default voice survives Direct Boot. */
     private fun storage(context: Context): Context = DeviceStorage.context(context)
 
-    fun savedVoice(context: Context, voices: List<Info> = installed(context)): Info? {
+    @Synchronized fun savedVoice(context: Context, voices: List<Info> = installed(context)): Info? {
         // In-memory cache first: the picker's choice is visible to the next
         // utterance in this process without waiting on disk I/O.
         val store = storage(context)
@@ -113,11 +114,45 @@ object VoiceCatalog {
      * disk write must target device-protected storage too, or a reboot
      * before unlock would forget the voice on the lock screen.
      */
-    fun saveVoice(context: Context, info: Info) {
+    @Synchronized fun saveVoice(context: Context, info: Info) {
         cachedDefaultLabel = info.label
         defaultCacheValid = true
         storage(context).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_DEFAULT_VOICE, info.label).apply()
+    }
+
+    internal fun savedInstalledVoice(context: Context): Info? =
+        savedVoice(context, all)?.takeIf { InstalledData(storage(context).filesDir).has(it) }
+
+    private class InstalledData(files: File) {
+        private val oneCore = File(files, "voice")
+        private val anna = File(files, "anna")
+        private val sapi4 = File(files, "sapi4")
+        private val sapi5 = File(files, "sapi5")
+
+        private val shared by lazy { File(oneCore, SappleVoices.SHARED_DATA).let { it.isFile && it.length() > 0 } }
+        private val sapi4Ready by lazy {
+            listOf("msttssyn.dll", "sam.vce", "male.vce", "female.vce",
+                "sam.cfg", "male.cfg", "female.cfg").all { File(sapi4, it).isFile }
+        }
+        private val sapi5Ready by lazy {
+            listOf("LTTS1033.LXA", "r1033tts.LXA").all { File(sapi5, it).isFile }
+        }
+        private val annaReady by lazy {
+            listOf("CSD", "IDX", "UNT", "CRT", "APL", "UDT", "TTS", "LTS", "WIH", "KEY", "HAN")
+                .all { File(anna, "M1033DSK.$it").isFile }
+        }
+
+        fun has(info: Info): Boolean = when (info.engine) {
+            Engine.ONECORE -> shared && listOf("APM", "INI").all {
+                File(oneCore, "M1033${info.name}.$it").isFile
+            }
+            Engine.ANNA -> annaReady
+            Engine.SAPI4 -> sapi4Ready
+            Engine.SAPI5 -> sapi5Ready && listOf("spd", "sdf").all {
+                File(sapi5, "${info.name.removeSuffix("5")}.$it").isFile
+            }
+        }
     }
 
     /**
@@ -127,34 +162,8 @@ object VoiceCatalog {
      * engines keep one folder each.
      */
     fun installed(context: android.content.Context): List<Info> {
-        val files = storage(context).filesDir
-        val oneCore = java.io.File(files, "voice")
-        val anna = java.io.File(files, "anna")
-        val sapi4 = java.io.File(files, "sapi4")
-        val sapi5 = java.io.File(files, "sapi5")
-
-        val shared = java.io.File(oneCore, SappleVoices.SHARED_DATA)
-            .let { it.isFile && it.length() > 0 }
-        val sapi4Ready = listOf("msttssyn.dll", "sam.vce", "male.vce", "female.vce",
-            "sam.cfg", "male.cfg", "female.cfg")
-            .all { java.io.File(sapi4, it).isFile }
-        val sapi5Ready = listOf("LTTS1033.LXA", "r1033tts.LXA").all { java.io.File(sapi5, it).isFile }
-        val annaReady = listOf("CSD", "IDX", "UNT", "CRT", "APL", "UDT", "TTS", "LTS", "WIH", "KEY", "HAN")
-            .all { java.io.File(anna, "M1033DSK.$it").isFile }
-
-        return all.filter { info ->
-            when (info.engine) {
-                Engine.ONECORE ->
-                    shared && listOf("APM", "INI").all {
-                        java.io.File(oneCore, "M1033${info.name}.$it").isFile
-                    }
-                Engine.ANNA -> annaReady
-                Engine.SAPI4 -> sapi4Ready
-                Engine.SAPI5 -> sapi5Ready && listOf("spd", "sdf").all {
-                    java.io.File(sapi5, "${info.name.removeSuffix("5")}.$it").isFile
-                }
-            }
-        }
+        val data = InstalledData(storage(context).filesDir)
+        return all.filter { data.has(it) }
     }
 
     fun infoFor(name: String?): Info? {

@@ -19,7 +19,7 @@ object NativeSapi5 {
     @JvmStatic external fun sampleRate(handle: Long): Int
 
     /** Blocking; [cancel] from another thread stops it. */
-    @JvmStatic external fun speak(handle: Long, text: String): ShortArray?
+    @JvmStatic external fun speak(handle: Long, text: String, sink: PcmSink): Int
 
     @JvmStatic external fun cancel(handle: Long)
 }

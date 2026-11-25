@@ -14,6 +14,42 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Test JNI PCM streaming
+        run: |
+          mkdir -p "$RUNNER_TEMP/pcm-test"
+          cc -shared -fPIC -std=c99 -Wall -Wextra -Werror -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" app/src/test/native/pcm_stream_test.c -o "$RUNNER_TEMP/pcm-test/libpcm-test.so"
+          javac -d "$RUNNER_TEMP/pcm-test" app/src/test/native/PcmStreamTest.java
+          java -cp "$RUNNER_TEMP/pcm-test" PcmStreamTest "$RUNNER_TEMP/pcm-test/libpcm-test.so"
+          cc -std=c99 -D_DEFAULT_SOURCE -fPIC -shared -Wall -Wextra -Werror -Wno-unused-parameter \
+            -Wl,--wrap=malloc -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+            -Iapp/src/test/native -Iapp/src/main/cpp/sapi4/lib -Iapp/src/main/cpp \
+            app/src/test/native/sapi4_jni_list_modes_test.c -o "$RUNNER_TEMP/pcm-test/libsapi4_jni_list_modes_test.so"
+          javac -d "$RUNNER_TEMP/pcm-test" app/src/test/native/Sapi4JniListModesTest.java
+          java -Djava.library.path="$RUNNER_TEMP/pcm-test" -cp "$RUNNER_TEMP/pcm-test" org.sapidroid.tts.Sapi4JniListModesTest
+      - name: Test native engine fast paths
+        run: |
+          for test in onecore_fast_path_test anna_fast_path_test anna_decoder_bounds_test sapi4_queue_test sapi5_fast_path_test sapi5_fx_fast_path_test; do
+            cc -std=c99 -O2 -ffunction-sections -fdata-sections "app/src/test/native/$test.c" -Wl,--gc-sections -lm -pthread -o "$RUNNER_TEMP/$test"
+            "$RUNNER_TEMP/$test"
+          done
+          cc -std=c99 -O2 -ffp-contract=off -fno-fast-math app/src/test/native/onecore_cancel_test.c engine/*.c \
+            -Wl,--wrap=zb_tree_leaf,--wrap=zb_state_gauss -lm -o "$RUNNER_TEMP/onecore_cancel_test"
+          "$RUNNER_TEMP/onecore_cancel_test"
+          cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zira_tts_host_test.c -pthread \
+            -Wl,--gc-sections -o "$RUNNER_TEMP/zira_tts_host_test"
+          "$RUNNER_TEMP/zira_tts_host_test"
+          cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zf1_enum_host_test.c engine/zf1_ana.c engine/zf1_util.c \
+            -Wl,--gc-sections -o "$RUNNER_TEMP/zf1_enum_host_test"
+          "$RUNNER_TEMP/zf1_enum_host_test"
+          cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zf2_word_position_host_test.c engine/zf2_feat.c engine/zf2_tree.c engine/zf2_units.c engine/zb_apm.c \
+            -Wl,--gc-sections,--wrap=malloc,--wrap=calloc -lm -o "$RUNNER_TEMP/zf2_word_position_host_test"
+          "$RUNNER_TEMP/zf2_word_position_host_test"
+          cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zb_pool_host_test.c engine/zb_apm.c \
+            -Wl,--gc-sections -lm -o "$RUNNER_TEMP/zb_pool_host_test"
+          "$RUNNER_TEMP/zb_pool_host_test"
+          cc -std=c99 -O2 -ffunction-sections -fdata-sections engine/tests/zb_int_pool_host_test.c \
+            -Wl,--gc-sections -lm -o "$RUNNER_TEMP/zb_int_pool_host_test"
+          "$RUNNER_TEMP/zb_int_pool_host_test"
       - name: Build and test
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --console=plain
       - uses: actions/upload-artifact@v4

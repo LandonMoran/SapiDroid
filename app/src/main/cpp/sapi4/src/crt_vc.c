@@ -50,6 +50,7 @@ recurse:;
 
 #ifndef DECOMP_HOOK
 #include <stdlib.h>
+#include <stdatomic.h>
 void *vc_malloc(size_t n) { return malloc(n); }
 void vc_free(void *p) { free(p); }
 void *vc_realloc(void *p, size_t n) { return realloc(p, n); }
@@ -61,36 +62,36 @@ void vc_EnterCriticalSection(void *cs) { (void)cs; }
 void vc_LeaveCriticalSection(void *cs) { (void)cs; }
 // events of a single-threaded build: set / reset flags; a wait on nothing set times out (0x102)
 #define VC_NEVENTS 4096
-static struct { int used, manual, set; } vc_events[VC_NEVENTS];
+static struct { atomic_int used; int manual; atomic_int set; } vc_events[VC_NEVENTS];
 uint32_t vc_CreateEventA(int32_t manual, int32_t initial) {
     for (uint32_t i = 1; i < VC_NEVENTS; i++)
-        if (!vc_events[i].used) {
-            vc_events[i].used = 1;
+        if (!atomic_load(&vc_events[i].used)) {
+            atomic_store(&vc_events[i].used, 1);
             vc_events[i].manual = manual != 0;
-            vc_events[i].set = initial != 0;
+            atomic_store(&vc_events[i].set, initial != 0);
             return 0x10000u + i;
         }
     return 0;
 }
 void vc_event_close(uint32_t h) {
-    if (h > 0x10000u && h < 0x10000u + VC_NEVENTS) vc_events[h - 0x10000u].used = 0;
+    if (h > 0x10000u && h < 0x10000u + VC_NEVENTS) atomic_store(&vc_events[h - 0x10000u].used, 0);
 }
 void vc_InitializeCriticalSection(void *cs) { (void)cs; }
-static int vc_event(uint32_t h) { return h > 0x10000u && h < 0x10000u + VC_NEVENTS && vc_events[h - 0x10000u].used ? (int)(h - 0x10000u) : 0; }
-int32_t vc_SetEvent(uint32_t h) { int i = vc_event(h); if (i) vc_events[i].set = 1; return i != 0; }
-int32_t vc_ResetEvent(uint32_t h) { int i = vc_event(h); if (i) vc_events[i].set = 0; return i != 0; }
+static int vc_event(uint32_t h) { return h > 0x10000u && h < 0x10000u + VC_NEVENTS && atomic_load(&vc_events[h - 0x10000u].used) ? (int)(h - 0x10000u) : 0; }
+int32_t vc_SetEvent(uint32_t h) { int i = vc_event(h); if (i) atomic_store(&vc_events[i].set, 1); return i != 0; }
+int32_t vc_ResetEvent(uint32_t h) { int i = vc_event(h); if (i) atomic_store(&vc_events[i].set, 0); return i != 0; }
 extern _Thread_local void (*vc_idle_hook)(void);
 uint32_t vc_WaitForMultipleObjects(uint32_t n, const uint32_t *hs, int all, uint32_t ms) {
     (void)ms;
     if (all) {
-        for (uint32_t k = 0; k < n; k++) { int i = vc_event(hs[k]); if (!i || !vc_events[i].set) return 0x102; }
-        for (uint32_t k = 0; k < n; k++) { int i = vc_event(hs[k]); if (!vc_events[i].manual) vc_events[i].set = 0; }
+        for (uint32_t k = 0; k < n; k++) { int i = vc_event(hs[k]); if (!i || !atomic_load(&vc_events[i].set)) return 0x102; }
+        for (uint32_t k = 0; k < n; k++) { int i = vc_event(hs[k]); if (!vc_events[i].manual) atomic_store(&vc_events[i].set, 0); }
         return 0;
     }
     for (uint32_t k = 0; k < n; k++) {
         int i = vc_event(hs[k]);
-        if (i && vc_events[i].set) {
-            if (!vc_events[i].manual) vc_events[i].set = 0;
+        if (i && atomic_load(&vc_events[i].set)) {
+            if (!vc_events[i].manual) atomic_store(&vc_events[i].set, 0);
             return k;
         }
     }

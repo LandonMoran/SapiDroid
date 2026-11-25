@@ -177,7 +177,8 @@ void sam4fx_process(sam4fx *fx, float *x, int n)
 /* one call = one engine chunk (the RoboSoft One/Six random loop length changes per call) */
 void sam4fx_process_s16(sam4fx *fx, int16_t *x, int n)
 {
-    float *buf = n > 0 ? malloc(sizeof(float) * (size_t)n) : NULL;
+    float local[BLOCK];
+    float *buf = n > 0 && n <= BLOCK ? local : n > 0 ? malloc(sizeof(float) * (size_t)n) : NULL;
     int i;
     if (!buf) return;
     for (i = 0; i < n; i++) buf[i] = x[i];
@@ -186,7 +187,7 @@ void sam4fx_process_s16(sam4fx *fx, int16_t *x, int n)
         float y = buf[i];
         x[i] = (int16_t)(y < -32768.0f ? -32768.0f : y > 32767.0f ? 32767.0f : y);
     }
-    free(buf);
+    if (buf != local) free(buf);
 }
 
 void sam4fx_free(sam4fx *fx)
