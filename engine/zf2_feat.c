@@ -464,23 +464,21 @@ static int parse_path(const char *path, Path *p)
 
 int zf2_nphones(const zf2_sent *s) { return s->np; }
 
-int zf2_eval_path(const zf2_sent *s, const char *path, zf2_value *vals)
+static int eval_path(const zf2_sent *s, const Path *p, zf2_value *vals)
 {
-    Path p;
     Node last = {0, -1};
     zf2_value last_value;
     int i, k;
-    if (parse_path(path, &p) || p.nstep < 1 || p.lv[0] != L_PHONE || p.dir[0] != 0) return -1;
     for (i = 0; i < s->np; i++) {
         Node x = {L_PHONE, i};
         vals[i].kind = -1;
         vals[i].value = -1;
-        for (k = 1; k < p.nstep && x.i >= 0; k++) x = step(s, x, p.lv[k], p.dir[k], p.skip[k]);
+        for (k = 1; k < p->nstep && x.i >= 0; k++) x = step(s, x, p->lv[k], p->dir[k], p->skip[k]);
         if (x.i < 0) continue;
         if (x.level == last.level && x.i == last.i) {
             vals[i] = last_value;
         } else {
-            if (get_value(s, x, p.prop, &vals[i]) < 0) return -1;
+            if (get_value(s, x, p->prop, &vals[i]) < 0) return -1;
             last = x;
             last_value = vals[i];
         }
@@ -488,8 +486,29 @@ int zf2_eval_path(const zf2_sent *s, const char *path, zf2_value *vals)
     return 0;
 }
 
+static int prepare_path(const char *path, Path *p)
+{
+    return parse_path(path, p) || p->nstep < 1 || p->lv[0] != L_PHONE || p->dir[0] != 0 ? -1 : 0;
+}
+
+int zf2_eval_path(const zf2_sent *s, const char *path, zf2_value *vals)
+{
+    Path p;
+    if (prepare_path(path, &p)) return -1;
+    return eval_path(s, &p, vals);
+}
+
 int zf2_features(const zf2_sent *s, ZbUtt *u)
 {
+#if defined(_MSC_VER)
+    static __declspec(thread) Path paths[ZB_NFEAT];
+    static __declspec(thread) unsigned char valid[ZB_NFEAT];
+    static __declspec(thread) int paths_ready;
+#else
+    static _Thread_local Path paths[ZB_NFEAT];
+    static _Thread_local unsigned char valid[ZB_NFEAT];
+    static _Thread_local int paths_ready;
+#endif
     int f, i;
     zf2_value *vals;
     u->nphone = 0;
@@ -499,8 +518,12 @@ int zf2_features(const zf2_sent *s, ZbUtt *u)
     u->ph = (ZbPhone *)calloc((size_t)(s->np ? s->np : 1), sizeof(ZbPhone));
     if (!u->ph) { free(vals); return -1; }
     u->nphone = s->np;
+    if (!paths_ready) {
+        for (f = 0; f < ZB_NFEAT; f++) valid[f] = prepare_path(zb_feature_path[f], &paths[f]) == 0;
+        paths_ready = 1;
+    }
     for (f = 0; f < ZB_NFEAT; f++) {
-        if (zf2_eval_path(s, zb_feature_path[f], vals)) {
+        if (!valid[f] || eval_path(s, &paths[f], vals)) {
             for (i = 0; i < s->np; i++) u->ph[i].f[f] = ZB_NULL;
             continue;
         }

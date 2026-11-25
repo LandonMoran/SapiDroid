@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include "../zf2_int.h"
 
@@ -15,6 +16,25 @@ void *__wrap_calloc(size_t count, size_t size)
 {
     if (fail_calloc) { fail_calloc = 0; return NULL; }
     return __real_calloc(count, size);
+}
+
+static void *check_features(void *arg)
+{
+    const Z2Sent *s = arg;
+    for (int pass = 0; pass < 2; pass++) {
+        ZbUtt out = {0};
+        zf2_value vals[12];
+        assert(zf2_features(s, &out) == 0 && out.nphone == s->np);
+        for (int f = 0; f < ZB_NFEAT; f++) {
+            int rc = zf2_eval_path(s, zb_feature_path[f], vals);
+            for (int i = 0; i < s->np; i++) {
+                int expected = rc || vals[i].kind < 0 ? ZB_NULL : vals[i].value;
+                assert(out.ph[i].f[f] == expected);
+            }
+        }
+        zf2_utt_free(&out);
+    }
+    return NULL;
 }
 
 int main(void)
@@ -39,6 +59,7 @@ int main(void)
     v.short_pause = -1;
     s.v = &v; s.w = w; s.nw = 6; s.s = syl; s.ns = 6; s.p = phone; s.np = 12;
     for (i = 0; i < 6; i++) {
+        w[i].frag = -1;
         w[i].type = (i == 0 || i == 5) ? 3 : 0;
         w[i].npron = 1; w[i].ns = 1; w[i].s0 = i;
         w[i].bi = (i == 0 || i == 4 || i == 5) ? 5 : i == 2 ? 4 : 1;
@@ -69,6 +90,12 @@ int main(void)
         assert(zf2_features(&s, &out) == -1 && !out.ph && out.nphone == 0);
         fail_calloc = 1;
         assert(zf2_features(&s, &out) == -1 && !out.ph && out.nphone == 0);
+    }
+    {
+        pthread_t thread;
+        assert(pthread_create(&thread, NULL, check_features, &s) == 0);
+        check_features(&s);
+        assert(pthread_join(thread, NULL) == 0);
     }
     free(s.ph); free(s.ip); free(s.pw);
     return 0;
