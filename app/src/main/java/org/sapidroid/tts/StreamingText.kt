@@ -16,12 +16,12 @@ internal object StreamingText {
                 (i + 1 >= trimmed.length || trimmed[i + 1].isWhitespace())
             if ((endOfSentence || c == '\n') && i + 1 - start >= 20) {
                 var end = i + 1
-                while (end < trimmed.length && trimmed[end].isWhitespace()) end++
                 val chunk = trimmed.substring(start, end).trim()
                 if (chunk.isNotEmpty()) {
                     emitted = true
                     if (!consume(chunk)) return
                 }
+                while (end < trimmed.length && trimmed[end].isWhitespace()) end++
                 start = end
                 i = end
                 continue
