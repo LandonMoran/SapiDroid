@@ -85,6 +85,12 @@ jobs:
       # points or its AIDL method. Build the profiling variant too, so they cannot rot.
       - name: Build the profiling APK
         run: ./gradlew :app:assembleDebug -Pprofile --console=plain
+      # The profiling build replaces the debug APK in the output folder, so upload it separately:
+      # it is the one to install when collecting numbers on a phone that has the voices.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sapidroid-profile-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
 
   fallback-on-emulator:
     runs-on: ubuntu-latest
