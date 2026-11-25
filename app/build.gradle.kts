@@ -13,9 +13,11 @@ android {
         targetSdk = 34
         versionCode = 12
         versionName = "0.9.2"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            if (project.hasProperty("emulatorTests")) abiFilters += "x86_64"
         }
         externalNativeBuild {
             cmake {
@@ -58,4 +60,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
