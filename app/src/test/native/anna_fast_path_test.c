@@ -69,6 +69,16 @@ static void *cancel_while_rendering(void *unused) {
     return NULL;
 }
 
+static int cancelled_at_start(void *arg) {
+    anna_tts *t = arg;
+    assert(!anna_cancel_requested(&t->cancel));
+    return 1;
+}
+static int cancel_during_check(void *arg) {
+    anna_tts_cancel(arg);
+    return 0;
+}
+
 int main(void) {
     anna_unitinfo info[2] = {{0}};
     anna_tts t = {0};
@@ -76,6 +86,11 @@ int main(void) {
     pthread_t canceller;
     const int16_t pcm[] = { -100, -1, 0, 100 };
     t.info = info;
+    anna_tts_cancel(&t);
+    assert(anna_tts_speak_checked(&t, "abc", 0, &cb, cancelled_at_start, &t) == 1);
+    assert(audio_count == 0 && anna_cancel_requested(&t.cancel));
+    assert(anna_tts_speak_checked(&t, "abc", 0, &cb, cancel_during_check, &t) == 1);
+    assert(audio_count == 0 && anna_cancel_requested(&t.cancel));
     assert(anna_tts_speak(&t, "abc", 0, &cb) == 0);
     assert(audio_count == 1 && memcmp(output, pcm, sizeof pcm) == 0);
     expected_events = 1;

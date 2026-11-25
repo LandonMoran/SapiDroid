@@ -87,12 +87,28 @@ static void *speak_thread(void *arg)
     zira_tts *t = (zira_tts *)arg;
     return (void *)(intptr_t)zira_tts_speak(t, "cancel", 0, NULL);
 }
+static int cancelled_at_start(void *arg)
+{
+    zira_tts *t = arg;
+    assert(!zb_cancel_load(&t->cancel));
+    return 1;
+}
+static int cancel_during_check(void *arg)
+{
+    zira_tts_cancel(arg);
+    return 0;
+}
 
 int main(void)
 {
     zira_tts t = {0};
     zira_callbacks cb = {NULL, event, NULL};
     t.male = 1;
+    zb_cancel_store(&t.cancel, 1);
+    assert(zira_tts_speak_checked(&t, "cancel", 0, &cb, cancelled_at_start, &t) == 1);
+    assert(npieces == 0 && ends == 0 && zb_cancel_load(&t.cancel));
+    assert(zira_tts_speak_checked(&t, "cancel", 0, &cb, cancel_during_check, &t) == 1);
+    assert(npieces == 0 && ends == 0 && zb_cancel_load(&t.cancel));
 
     assert(zira_tts_speak(&t, "<lang", ZIRA_SPEAK_XML, &cb) == 0);
     assert(npieces == 1 && !strcmp(pieces[0], "<lang") && ends == 1);

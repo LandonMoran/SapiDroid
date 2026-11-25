@@ -84,6 +84,9 @@ int s4_set_speed(s4_engine *e, unsigned wpm);
 /* Speak text (Windows-1252, NUL-terminated), delivering PCM to fn as it is made. Returns 0 when the
  * utterance is complete, 1 if it was stopped (s4_stop, or fn returned nonzero), -1 on error. */
 int s4_speak(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn, void *user);
+/* check_cancel runs after the native cancel flag is reset and before synthesis starts. */
+int s4_speak_checked(s4_engine *e, const char *text, unsigned flags, s4_pcm_fn fn, void *user,
+                     int (*check_cancel)(void *), void *check_user);
 
 /* Stop the utterance in progress as soon as possible (any thread; never blocks). The rest of it is
  * discarded. A stop that arrives when nothing is being spoken is forgotten. */

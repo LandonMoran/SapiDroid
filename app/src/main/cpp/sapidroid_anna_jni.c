@@ -61,7 +61,7 @@ Java_org_sapidroid_tts_NativeAnna_speak(JNIEnv *env, jclass clazz, jlong h, jstr
     cb.audio = pcm_stream_audio;
     cb.user = &stream;
 
-    int rc = anna_tts_speak((anna_tts *)(intptr_t)h, c_text, 0, &cb);
+    int rc = anna_tts_speak_checked((anna_tts *)(intptr_t)h, c_text, 0, &cb, pcm_stream_cancelled, &stream);
     free(c_text);
 
     if (rc < 0) {

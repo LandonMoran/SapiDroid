@@ -570,7 +570,8 @@ static void silence(sam_speech *t, size_t n, int volume)
 
 /* ------------------------------------------------------------------ speak */
 
-int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb)
+int sam_tts_speak_checked(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb,
+                          int (*check_cancel)(void *), void *check_user)
 {
     xdoc *d;
     xdoc plain = {0};
@@ -581,6 +582,10 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
     long runcap = 0;
     if (!t || !utf8 || !cb) return -1;
     sam_cancel_set(&t->cancel, 0);
+    if (check_cancel && check_cancel(check_user)) {
+        sam_cancel_set(&t->cancel, 1);
+        return 1;
+    }
     t->stopped = 0;
     t->base = 0;
     t->cb = cb;
@@ -685,4 +690,9 @@ int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callback
     t->bmap = NULL;
     if (d != &plain) xdoc_free(d);
     return rc;
+}
+
+int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb)
+{
+    return sam_tts_speak_checked(t, utf8, flags, cb, NULL, NULL);
 }

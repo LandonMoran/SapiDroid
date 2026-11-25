@@ -434,7 +434,10 @@ class SapiDroidWorkerService : Service() {
                 synchronized(state) { failed = true }
                 return
             }
-            val sink = PcmSink { bytes -> enqueueAudio(id, bytes) }
+            val sink = object : PcmSink {
+                override fun onPcm(bytes: ByteArray) = enqueueAudio(id, bytes)
+                override fun isCancelled() = this@SapiDroidWorkerService.isCancelled(id)
+            }
             StreamingText.forEachChunk(text) { piece ->
                 if (isCancelled(id)) return@forEachChunk false
                 val result = synthChunk(id, info, ratePercent, pitchPercent, piece, sink)

@@ -55,6 +55,16 @@ static void event(const sam_event *ev, void *user) {
     }
 }
 
+static int cancelled_at_start(void *arg) {
+    sam_speech *t = arg;
+    assert(!sam_cancelled(&t->cancel));
+    return 1;
+}
+static int cancel_during_check(void *arg) {
+    sam_tts_cancel(arg);
+    return 0;
+}
+
 int main(void) {
     sam_callbacks cb = { audio, NULL, NULL };
     sam_speech t = {0};
@@ -79,6 +89,11 @@ int main(void) {
     memset(&t, 0, sizeof t);
     t.volume = 100;
     stop_audio = 0;
+    sam_tts_cancel(&t);
+    assert(sam_tts_speak_checked(&t, "abc", 0, &cb, cancelled_at_start, &t) == 1);
+    assert(calls == 4 && sam_cancelled(&t.cancel));
+    assert(sam_tts_speak_checked(&t, "abc", 0, &cb, cancel_during_check, &t) == 1);
+    assert(calls == 4 && sam_cancelled(&t.cancel));
     fail_alloc = 1;
     assert(sam_tts_speak(&t, "abc", 0, &cb) == 0);
     assert(sam_tts_speak(&t, "<rate speed=\"1\">abc</rate>", SAM_SPEAK_XML, &cb) == -1);

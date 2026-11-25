@@ -305,7 +305,8 @@ static int speak_piece(zira_tts *t, speak_ctx *c, const char *piece, int xml, Zb
     return rc;
 }
 
-int zira_tts_speak(zira_tts *t, const char *utf8, int flags, const zira_callbacks *cb)
+int zira_tts_speak_checked(zira_tts *t, const char *utf8, int flags, const zira_callbacks *cb,
+                           int (*check_cancel)(void *), void *check_user)
 {
     speak_ctx c;
     zira_callbacks none;
@@ -320,6 +321,10 @@ int zira_tts_speak(zira_tts *t, const char *utf8, int flags, const zira_callback
     c.t = t;
     c.cb = cb;
     zb_cancel_store(&t->cancel, 0);
+    if (check_cancel && check_cancel(check_user)) {
+        zb_cancel_store(&t->cancel, 1);
+        return 1;
+    }
     if (!xml || !t->male) {
         if (*utf8 && !zb_cancel_load(&t->cancel))
             rc = speak_piece(t, &c, utf8, xml, t->vb, t->vf);
@@ -374,4 +379,9 @@ done:
         cb->event(&e, cb->user);
     }
     return rc;
+}
+
+int zira_tts_speak(zira_tts *t, const char *utf8, int flags, const zira_callbacks *cb)
+{
+    return zira_tts_speak_checked(t, utf8, flags, cb, NULL, NULL);
 }

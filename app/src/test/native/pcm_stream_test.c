@@ -2,6 +2,13 @@
 #include "../../main/cpp/jni_text.h"
 #include <string.h>
 
+JNIEXPORT jint JNICALL Java_PcmStreamTest_check(JNIEnv *env, jclass cls, jobject sink) {
+    (void)cls;
+    pcm_stream stream;
+    if (pcm_stream_init(&stream, env, sink)) return -1;
+    return pcm_stream_cancelled(&stream);
+}
+
 JNIEXPORT jint JNICALL Java_PcmStreamTest_emit(JNIEnv *env, jclass cls, jobject sink) {
     (void)cls;
     pcm_stream stream;

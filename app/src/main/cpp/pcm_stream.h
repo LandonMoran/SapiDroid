@@ -9,6 +9,7 @@ typedef struct {
     JNIEnv *env;
     jobject sink;
     jmethodID on_pcm;
+    jmethodID is_cancelled;
     int failed;
 } pcm_stream;
 
@@ -17,13 +18,26 @@ static int pcm_stream_init(pcm_stream *stream, JNIEnv *env, jobject sink) {
     jclass cls = (*env)->GetObjectClass(env, sink);
     if (!cls) return -1;
     jmethodID method = (*env)->GetMethodID(env, cls, "onPcm", "([B)Z");
+    jmethodID cancelled = method ? (*env)->GetMethodID(env, cls, "isCancelled", "()Z") : NULL;
     (*env)->DeleteLocalRef(env, cls);
-    if (!method) return -1;
+    if (!method || !cancelled) return -1;
     stream->env = env;
     stream->sink = sink;
     stream->on_pcm = method;
+    stream->is_cancelled = cancelled;
     stream->failed = 0;
     return 0;
+}
+
+static int pcm_stream_cancelled(void *user) {
+    pcm_stream *stream = (pcm_stream *)user;
+    JNIEnv *env = stream->env;
+    jboolean cancelled = (*env)->CallBooleanMethod(env, stream->sink, stream->is_cancelled);
+    if ((*env)->ExceptionCheck(env)) {
+        stream->failed = 1;
+        return 1;
+    }
+    return cancelled == JNI_TRUE;
 }
 
 /* Engine callbacks run synchronously on the JNI caller's thread. */

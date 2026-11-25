@@ -31,10 +31,15 @@ jobs:
       - name: Test native engine fast paths
         run: |
           for test in onecore_fast_path_test anna_fast_path_test anna_decoder_bounds_test sapi4_queue_test sapi4_stage_queue_test sapi5_fast_path_test sapi5_fx_fast_path_test; do
-            cc -std=c99 -O2 -Iapp/src/main/cpp/sapi4/src -Iapp/src/main/cpp/sapi4/port \
+            cc -std=c99 -D_DEFAULT_SOURCE -O2 -Iapp/src/main/cpp/sapi4/src -Iapp/src/main/cpp/sapi4/port \
               -ffunction-sections -fdata-sections "app/src/test/native/$test.c" -Wl,--gc-sections -lm -pthread -o "$RUNNER_TEMP/$test"
             "$RUNNER_TEMP/$test"
           done
+          cc -std=c99 -O2 -Iapp/src/main/cpp/sapi4/src -Iapp/src/main/cpp/sapi4/port \
+            -ffunction-sections -fdata-sections app/src/test/native/sapi4_start_cancel_test.c \
+            app/src/main/cpp/sapi4/src/*.c app/src/main/cpp/sapi4/lib/stubs.c app/src/main/cpp/sapi4/port/dllimage.c \
+            -Wl,--gc-sections -lm -pthread -o "$RUNNER_TEMP/sapi4_start_cancel_test"
+          "$RUNNER_TEMP/sapi4_start_cancel_test"
           cc -std=c99 -O2 -ffp-contract=off -fno-fast-math app/src/test/native/onecore_cancel_test.c engine/*.c \
             -Wl,--wrap=zb_tree_leaf,--wrap=zb_state_gauss -lm -o "$RUNNER_TEMP/onecore_cancel_test"
           "$RUNNER_TEMP/onecore_cancel_test"

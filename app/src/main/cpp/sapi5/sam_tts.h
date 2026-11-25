@@ -85,6 +85,9 @@ SAM_API int sam_tts_set_effect(sam_speech *t, const char *name);
 /* Speak UTF-8 text; returns 0 when done, 1 when cancelled/stopped, -1 on error.
  * Not reentrant for one sam_speech; use one handle per thread. */
 SAM_API int sam_tts_speak(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb);
+/* check_cancel runs after the native cancel flag is reset and before synthesis starts. */
+SAM_API int sam_tts_speak_checked(sam_speech *t, const char *utf8, int flags, const sam_callbacks *cb,
+                                  int (*check_cancel)(void *), void *check_user);
 
 /* thread-safe: stop the current speak as soon as possible (within one audio chunk) */
 SAM_API void sam_tts_cancel(sam_speech *t);

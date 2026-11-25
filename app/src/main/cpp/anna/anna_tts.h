@@ -74,6 +74,9 @@ ANNA_API void anna_tts_set_pitch(anna_tts *t, int pitch);
 /* speak UTF-8 text; returns 0 when done, 1 when cancelled/stopped, -1 on error.
  * Not reentrant for one anna_tts; use one anna_tts per thread (they can share nothing). */
 ANNA_API int anna_tts_speak(anna_tts *t, const char *utf8, int flags, const anna_callbacks *cb);
+/* check_cancel runs after the native cancel flag is reset and before synthesis starts. */
+ANNA_API int anna_tts_speak_checked(anna_tts *t, const char *utf8, int flags, const anna_callbacks *cb,
+                                    int (*check_cancel)(void *), void *check_user);
 
 /* thread-safe: stop the current anna_tts_speak as soon as possible (within one audio chunk) */
 ANNA_API void anna_tts_cancel(anna_tts *t);
