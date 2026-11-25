@@ -1,4 +1,16 @@
+#include <stdlib.h>
+
+static int fail_alloc;
+static void *test_malloc(size_t n) { return fail_alloc ? NULL : malloc(n); }
+static void *test_calloc(size_t n, size_t size) { return fail_alloc ? NULL : calloc(n, size); }
+static void *test_realloc(void *ptr, size_t n) { return fail_alloc ? NULL : realloc(ptr, n); }
+#define malloc test_malloc
+#define calloc test_calloc
+#define realloc test_realloc
 #include "../../main/cpp/sapi5/sam_tts.c"
+#undef malloc
+#undef calloc
+#undef realloc
 #include <assert.h>
 
 static int calls, stop_audio, expected_events, events;
@@ -67,7 +79,10 @@ int main(void) {
     memset(&t, 0, sizeof t);
     t.volume = 100;
     stop_audio = 0;
+    fail_alloc = 1;
     assert(sam_tts_speak(&t, "abc", 0, &cb) == 0);
+    assert(sam_tts_speak(&t, "<rate speed=\"1\">abc</rate>", SAM_SPEAK_XML, &cb) == -1);
+    fail_alloc = 0;
     assert(calls == 5 && memcmp(received, pcm, sizeof pcm) == 0);
     cb.event = event;
     expected_events = 1;

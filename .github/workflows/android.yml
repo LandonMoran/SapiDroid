@@ -30,8 +30,9 @@ jobs:
           java -Djava.library.path="$RUNNER_TEMP/pcm-test" -cp "$RUNNER_TEMP/pcm-test" org.sapidroid.tts.Sapi4JniListModesTest
       - name: Test native engine fast paths
         run: |
-          for test in onecore_fast_path_test anna_fast_path_test anna_decoder_bounds_test sapi4_queue_test sapi5_fast_path_test sapi5_fx_fast_path_test; do
-            cc -std=c99 -O2 -ffunction-sections -fdata-sections "app/src/test/native/$test.c" -Wl,--gc-sections -lm -pthread -o "$RUNNER_TEMP/$test"
+          for test in onecore_fast_path_test anna_fast_path_test anna_decoder_bounds_test sapi4_queue_test sapi4_stage_queue_test sapi5_fast_path_test sapi5_fx_fast_path_test; do
+            cc -std=c99 -O2 -Iapp/src/main/cpp/sapi4/src -Iapp/src/main/cpp/sapi4/port \
+              -ffunction-sections -fdata-sections "app/src/test/native/$test.c" -Wl,--gc-sections -lm -pthread -o "$RUNNER_TEMP/$test"
             "$RUNNER_TEMP/$test"
           done
           cc -std=c99 -O2 -ffp-contract=off -fno-fast-math app/src/test/native/onecore_cancel_test.c engine/*.c \

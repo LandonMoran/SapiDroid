@@ -169,8 +169,8 @@ static int queue_take_items(Queue *q, QItem **items, uint32_t *count) {
     uint32_t capacity = queue_count(q);
     size_t bytes = (size_t)capacity * sizeof(QItem);
     if (capacity && bytes / sizeof(QItem) != capacity) return 0;
-    QItem *out = malloc(bytes ? bytes : sizeof(QItem));
-    if (!out) return 0;
+    QItem *out = capacity ? malloc(bytes) : NULL;
+    if (capacity && !out) return 0;
     if (!queue_take_all(q, out, capacity, count)) {
         free(out);
         return 0;
