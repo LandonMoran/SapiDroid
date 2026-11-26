@@ -13,6 +13,23 @@ int zf1_next_sentence(zf1_engine *e, zf_sentence *out) {
     (void)e; (void)out;
     return sentences++ == 0;
 }
+/* The neural voices' back end (eva_voice.c) and the sentence tree its feature paths need: not part of this test. */
+EvaModel *eva_model_open(const char *vp, int lcid, zf2_voice *vf, char *err, int errlen) {
+    (void)vp; (void)lcid; (void)vf; (void)err; (void)errlen;
+    return NULL;
+}
+void eva_model_close(EvaModel *m) { (void)m; }
+int eva_synth(EvaModel *m, ZbVoice *vb, const zf2_sent *s, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write,
+              void *user, ZbTrace *trace) {
+    (void)m; (void)vb; (void)s; (void)u; (void)sapi; (void)write; (void)user; (void)trace;
+    return 0;
+}
+int zb_voice_has_acoustics(const ZbVoice *v) { (void)v; return 1; }
+zf2_sent *zf2_run(const zf2_voice *v, const zf_sentence *in) { (void)v; (void)in; return NULL; }
+int zf2_features(const zf2_sent *s, ZbUtt *u) { (void)s; (void)u; return -1; }
+int zf2_make_events(const zf2_sent *s, zf2_events *ev) { (void)s; (void)ev; return -1; }
+void zf2_sent_free(zf2_sent *s) { (void)s; }
+
 int zf2_process(const zf2_voice *v, const zf_sentence *in, ZbUtt *out, zf2_events *ev) {
     (void)v; (void)in;
     assert((ev != NULL) == expected_events);
