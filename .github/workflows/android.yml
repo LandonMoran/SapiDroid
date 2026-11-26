@@ -235,7 +235,9 @@ jobs:
           for voice in David David David Sam5 Sam5 Sam5; do
             echo "-- $voice"
             "$ADB" shell am force-stop org.sapidroid.tts || true
-            "$ADB" shell am start -W -n org.sapidroid.tts/.MainActivity --es autospeak "$SENTENCE" --es voice "$voice"
+            # The device shell splits on spaces: quote the sentence (and the voice) for it, or am
+            # only gets the first word and drops the --es voice that follows.
+            "$ADB" shell "am start -W -n org.sapidroid.tts/.MainActivity --es autospeak '$SENTENCE' --es voice '$voice'"
             sleep 30
           done
 
