@@ -132,115 +132,200 @@ static void redistribute(long *len, int nseg, long m)
     }
 }
 
-long zb_wave_sps(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nstate, const int *stretch,
-                 const int *blk, int nblk, const short *pcm, short **out)
+/* ---------------------------------------------------------------- one synthesis block at a time */
+/* Everything the stage carries between blocks (the rate changer or Sonic stream, the previous block rate,
+ * the block flag of "first block", the input offset) lives in the run, so a block's output samples do not
+ * depend on a later block existing.  zb_wave_sps() is the same loop with the block outputs concatenated. */
+struct ZbWaveRun {
+    ZbVoice *v;
+    const ZbUtt *u;
+    const ZbSapi *sapi;
+    const int *dur;
+    int nstate;
+    const int *stretch;
+    int np, i, first, cap, bi, nblk, *blk;   /* blk: the caller's block grouping (int path), NULL = computed */
+    long off;
+    long *seglen;
+    int *fr;
+    Buf o, fl;
+    short *tmp;
+    long tmpcap;
+};
+
+ZbWaveRun *zb_wave_begin(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nstate, const int *stretch,
+                         const int *blk, int nblk)
 {
-    struct ZbWave *w = wave_state(v);
-    const int shift = v->shift, mix = v->cfg.mix_rate_scale;
-    int np = u->nphone, i = 0, first = 1, p, s, cap = 0, bi = 0;
-    long *seglen = (long *)calloc((size_t)np + 1, sizeof(long)), off = 0, pos;
-    int *fr = (int *)calloc((size_t)np + 1, sizeof(int));
-    Buf o = {0, 0, 0}, fl = {0, 0, 0};
-    short *tmp = NULL;
-    long tmpcap = 0;
-    for (p = 0; p < np; p++) {
-        for (s = 0; s < nstate; s++) fr[p] += dur[p * nstate + s];
-        if (cap < fr[p]) cap = fr[p];
+    ZbWaveRun *r = (ZbWaveRun *)calloc(1, sizeof *r);
+    int p, s;
+    if (!r) return NULL;
+    r->v = v;
+    r->u = u;
+    r->sapi = sapi;
+    r->dur = dur;
+    r->nstate = nstate;
+    r->stretch = stretch;
+    r->np = u->nphone;
+    r->first = 1;
+    wave_state(v);   /* the rate stage state persists across utterances, as in the engine */
+    r->seglen = (long *)calloc((size_t)r->np + 1, sizeof(long));
+    r->fr = (int *)calloc((size_t)r->np + 1, sizeof(int));
+    if (!r->seglen || !r->fr) { zb_wave_end(r); return NULL; }
+    for (p = 0; p < r->np; p++) {
+        for (s = 0; s < nstate; s++) r->fr[p] += dur[p * nstate + s];
+        if (r->cap < r->fr[p]) r->cap = r->fr[p];
     }
-    while (i < np) {
-        int start = i, count = 0, frames = 0, flag = stretch ? stretch[i] : 0, xr = u->ph[i].c.rate, rate, last;
-        long nin;
-        const short *in = pcm + off;
-        /* FUN_180009b14 block grouping (or the caller's blocks: int path, grouped per LSF chunk) */
-        if (blk) {
-            int c = bi < nblk ? blk[bi++] : np - i;
-            for (; c > 0 && i < np; c--) { frames += fr[i]; count++; i++; }
-        } else for (;;) {
-            if (frames + fr[i] > cap && count) break;
-            frames += fr[i];
-            count++;
-            i++;
-            if (i >= np) break;
-            if ((stretch ? stretch[i] : 0) != flag || u->ph[i].c.rate != xr) break;
-            if (first && count > 1) break;
+    if (blk && nblk > 0) {
+        r->blk = (int *)malloc(sizeof(int) * (size_t)nblk);
+        if (!r->blk) { zb_wave_end(r); return NULL; }
+        memcpy(r->blk, blk, sizeof(int) * (size_t)nblk);
+        r->nblk = nblk;
+    }
+    return r;
+}
+
+/* Process the next block of pcm (the utterance buffer; the run tracks the offset).  Returns 0 at the end,
+ * else 1 with the block's output in *out and its sample count in *n.  The buffer belongs to the run and is
+ * valid until the next call or zb_wave_end. */
+int zb_wave_next(ZbWaveRun *r, const short *pcm, short **out, long *n)
+{
+    ZbVoice *v;
+    struct ZbWave *w;
+    const ZbUtt *u;
+    int shift, mix;
+    int start, count, frames, flag, xr, rate, last, p;
+    long nin, pos, so;
+    const short *in;
+    if (!r || r->i >= r->np) return 0;
+    v = r->v;
+    u = r->u;
+    w = wave_state(v);
+    shift = v->shift;
+    mix = v->cfg.mix_rate_scale;
+    start = r->i;
+    count = 0;
+    frames = 0;
+    flag = r->stretch ? r->stretch[r->i] : 0;
+    xr = u->ph[r->i].c.rate;
+    in = pcm + r->off;
+    /* FUN_180009b14 block grouping (or the caller's blocks: int path, grouped per LSF chunk) */
+    if (r->blk) {
+        int c = r->bi < r->nblk ? r->blk[r->bi++] : r->np - r->i;
+        for (; c > 0 && r->i < r->np; c--) { frames += r->fr[r->i]; count++; r->i++; }
+    } else for (;;) {
+        if (frames + r->fr[r->i] > r->cap && count) break;
+        frames += r->fr[r->i];
+        count++;
+        r->i++;
+        if (r->i >= r->np) break;
+        if ((r->stretch ? r->stretch[r->i] : 0) != flag || u->ph[r->i].c.rate != xr) break;
+        if (r->first && count > 1) break;
+    }
+    nin = (long)frames * shift;
+    last = r->i >= r->np;
+    /* FUN_18004dd00 */
+    rate = block_rate(v, &u->ph[start].c, r->sapi);
+    r->fl.n = 0;
+    if ((rate != w->prev_rate || flag == 0) && w->rc) {   /* CRateChanger slot 5 */
+        long m = zb_rc_max_out(w->rc, 0);
+        if (r->fl.cap < m + 1) { r->fl.cap = m + 1; r->fl.p = (short *)realloc(r->fl.p, sizeof(short) * (size_t)r->fl.cap); }
+        r->fl.n = zb_rc_flush(w->rc, r->fl.p);
+        if (mix) smooth(w, r->fl.p, r->fl.n, 1);
+    } else if (rate != w->prev_rate || flag == 0) {
+        zb_sonic_flush(w->sonic);
+        put(&r->fl, NULL, 0);
+        if (zb_sonic_available(w->sonic)) {
+            long m = zb_sonic_available(w->sonic);
+            if (r->fl.cap < m) { r->fl.cap = m; r->fl.p = (short *)realloc(r->fl.p, sizeof(short) * (size_t)m); }
+            r->fl.n = zb_sonic_read(w->sonic, r->fl.p, (int)m);
+            if (mix) smooth(w, r->fl.p, r->fl.n, 1);
         }
-        nin = (long)frames * shift;
-        last = i >= np;
-        /* FUN_18004dd00 */
-        rate = block_rate(v, &u->ph[start].c, sapi);
-        fl.n = 0;
-        if ((rate != w->prev_rate || flag == 0) && w->rc) {   /* CRateChanger slot 5 */
-            long n = zb_rc_max_out(w->rc, 0);
-            if (fl.cap < n + 1) { fl.cap = n + 1; fl.p = (short *)realloc(fl.p, sizeof(short) * (size_t)fl.cap); }
-            fl.n = zb_rc_flush(w->rc, fl.p);
-            if (mix) smooth(w, fl.p, fl.n, 1);
-        } else if (rate != w->prev_rate || flag == 0) {
-            zb_sonic_flush(w->sonic);
-            put(&fl, NULL, 0);
-            if (zb_sonic_available(w->sonic)) {
-                long n = zb_sonic_available(w->sonic);
-                if (fl.cap < n) { fl.cap = n; fl.p = (short *)realloc(fl.p, sizeof(short) * (size_t)n); }
-                fl.n = zb_sonic_read(w->sonic, fl.p, (int)n);
-                if (mix) smooth(w, fl.p, fl.n, 1);
-            }
+    }
+    if (flag == 0) rate = 0;
+    r->o.n = 0;
+    pos = r->o.n;
+    if (rate == 0) {
+        if (r->fl.n == 0) put(&r->o, in, nin);          /* passthrough: segment lengths unchanged */
+        else {
+            put(&r->o, r->fl.p, r->fl.n);
+            put(&r->o, in, nin);
+            if (mix) smooth(w, r->o.p + pos + r->fl.n, nin, 0);
         }
-        if (flag == 0) rate = 0;
-        pos = o.n;
-        if (rate == 0) {
-            if (fl.n == 0) put(&o, in, nin);          /* passthrough: segment lengths unchanged */
-            else {
-                put(&o, fl.p, fl.n);
-                put(&o, in, nin);
-                if (mix) smooth(w, o.p + pos + fl.n, nin, 0);
-            }
+    } else {
+        long m;
+        int flags = r->first | (last ? 2 : 0);
+        if (w->rc) {   /* CRateChanger slots 1 and 4: the block flags go to process (bit0 reset, bit1 flush) */
+            zb_rc_set_speed(w->rc, (double)rate_speed(rate));
+            m = zb_rc_max_out(w->rc, (int)nin);
+            if (r->tmpcap < m + 1) { r->tmpcap = m + 1; r->tmp = (short *)realloc(r->tmp, sizeof(short) * (size_t)r->tmpcap); }
+            m = zb_rc_process(w->rc, in, (int)nin, r->tmp, flags);
         } else {
-            long m;
-            int flags = first | (last ? 2 : 0);
-            if (w->rc) {   /* CRateChanger slots 1 and 4: the block flags go to process (bit0 reset, bit1 flush) */
-                zb_rc_set_speed(w->rc, (double)rate_speed(rate));
-                m = zb_rc_max_out(w->rc, (int)nin);
-                if (tmpcap < m + 1) { tmpcap = m + 1; tmp = (short *)realloc(tmp, sizeof(short) * (size_t)tmpcap); }
-                m = zb_rc_process(w->rc, in, (int)nin, tmp, flags);
-            } else {
-                zb_sonic_set_speed(w->sonic, rate_speed(rate));
-                if (nin > 0) zb_sonic_write(w->sonic, in, (int)nin);
-                if (flags == 2) zb_sonic_flush(w->sonic);
-                m = zb_sonic_available(w->sonic);
-                if (tmpcap < m + 1) { tmpcap = m + 1; tmp = (short *)realloc(tmp, sizeof(short) * (size_t)tmpcap); }
-                m = zb_sonic_read(w->sonic, tmp, (int)m);
-            }
-            if (fl.n == 0) put(&o, tmp, m);
-            else {
-                put(&o, fl.p, fl.n);
-                if (m == 0) { put(&o, in, nin); if (mix) smooth(w, o.p + pos + fl.n, nin, 0); }
-                else { put(&o, tmp, m); if (mix) smooth(w, o.p + pos + fl.n, m, 0); }
-            }
+            zb_sonic_set_speed(w->sonic, rate_speed(rate));
+            if (nin > 0) zb_sonic_write(w->sonic, in, (int)nin);
+            if (flags == 2) zb_sonic_flush(w->sonic);
+            m = zb_sonic_available(w->sonic);
+            if (r->tmpcap < m + 1) { r->tmpcap = m + 1; r->tmp = (short *)realloc(r->tmp, sizeof(short) * (size_t)r->tmpcap); }
+            m = zb_sonic_read(w->sonic, r->tmp, (int)m);
         }
-        for (p = start; p < i; p++) seglen[p] = (long)fr[p] * shift;
-        if (!(rate == 0 && fl.n == 0)) redistribute(seglen + start, i - start, o.n - pos);
-        w->prev_rate = rate;
-        off += nin;
-        first = 0;
+        if (r->fl.n == 0) put(&r->o, r->tmp, m);
+        else {
+            put(&r->o, r->fl.p, r->fl.n);
+            if (m == 0) { put(&r->o, in, nin); if (mix) smooth(w, r->o.p + pos + r->fl.n, nin, 0); }
+            else { put(&r->o, r->tmp, m); if (mix) smooth(w, r->o.p + pos + r->fl.n, m, 0); }
+        }
     }
+    for (p = start; p < r->i; p++) r->seglen[p] = (long)r->fr[p] * shift;
+    if (!(rate == 0 && r->fl.n == 0)) redistribute(r->seglen + start, r->i - start, r->o.n - pos);
+    w->prev_rate = rate;
+    r->off += nin;
+    r->first = 0;
     /* voice volume (FUN_18001fedc: SpsVolumeAdjustment, the voices have NUS domain data;
      * + emotion.VolumeAdjustment - 100, decompile 0x18001ff8e) */
     {
-        int vol = zb_style_pct(v->cfg.sps_volume_adj, sapi ? sapi->style.volume : 0);
-        if (vol != 100) zb_scale_pcm(o.p, o.n, (float)vol / 100.0f);
+        int vol = zb_style_pct(v->cfg.sps_volume_adj, r->sapi ? r->sapi->style.volume : 0);
+        if (vol != 100) zb_scale_pcm(r->o.p, r->o.n, (float)vol / 100.0f);
     }
     /* SAPI volume per segment (FUN_18006d71c) */
     {
-        int sitevol = sapi ? sapi->volume : 100;
-        long so = 0;
-        for (p = 0; p < np; p++) {
+        int sitevol = r->sapi ? r->sapi->volume : 100;
+        so = 0;
+        for (p = start; p < r->i; p++) {
             if ((float)u->ph[p].c.volume != 100.0f || sitevol != 100) {
                 float x = (((float)sitevol * (float)u->ph[p].c.volume) / 100.0f) / 100.0f;
-                zb_scale_pcm(o.p + so, seglen[p], zb_sapi_vol_gain(x));
+                zb_scale_pcm(r->o.p + so, r->seglen[p], zb_sapi_vol_gain(x));
             }
-            so += seglen[p];
+            so += r->seglen[p];
         }
     }
-    free(seglen); free(fr); free(fl.p); free(tmp);
-    *out = o.p;
-    return o.n;
+    *out = r->o.p;
+    *n = r->o.n;
+    return 1;
+}
+
+void zb_wave_end(ZbWaveRun *r)
+{
+    if (!r) return;
+    free(r->seglen);
+    free(r->fr);
+    free(r->blk);
+    free(r->o.p);
+    free(r->fl.p);
+    free(r->tmp);
+    free(r);
+}
+
+long zb_wave_sps(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nstate, const int *stretch,
+                 const int *blk, int nblk, const short *pcm, short **out)
+{
+    ZbWaveRun *r = zb_wave_begin(v, u, sapi, dur, nstate, stretch, blk, nblk);
+    Buf all = {0, 0, 0};
+    short *o;
+    long n;
+    if (!r) {
+        *out = NULL;
+        return 0;
+    }
+    while (zb_wave_next(r, pcm, &o, &n)) put(&all, o, n);
+    zb_wave_end(r);
+    *out = all.p;
+    return all.n;
 }

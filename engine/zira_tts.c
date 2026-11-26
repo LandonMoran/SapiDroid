@@ -11,6 +11,7 @@
 #include "zb_atomic.h"
 #include "zf.h"
 #include "zf2.h"
+#include "eva_voice.h"   /* the neural voices (Eva, Sarah, Matilda) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,8 @@ struct zira_tts {
     zf2_voice *df;
     zf1_engine *e;
     int male;                   /* the voice's gender decides whether <lang> switches to David */
+    int lcid;                   /* locale, which the neural voices' networks need (1033, 2057, 3081) */
+    EvaModel *eva;              /* the neural back end, when the voice is one of those three */
     ZbSapi sapi;                /* engine-site rate/volume (the emotion is filled in per voice at speak time) */
     int rate_ext;               /* fast extension: extra per-phone <rate> steps above site rate 10 */
     int pitch;                  /* offset added to every phone's <pitch middle> */
@@ -45,6 +48,21 @@ static int stricmp_ascii(const char *a, const char *b)
 }
 
 const char *zira_tts_voice(const zira_tts *t) { return t ? t->voice : NULL; }
+
+/* The neural voices are the ones whose APM has only duration models; Eva, Sarah and Matilda are the three
+ * whose .NNM/.TDAT the Sapple bundle carries.  The locale feeds NN.NumericLinguisticFeatureNormFactor and the
+ * lower-case file names Windows ships. */
+static int voice_lcid(const char *voice)
+{
+    if (!stricmp_ascii(voice, "Sarah")) return 2057;
+    if (!stricmp_ascii(voice, "Matilda")) return 3081;
+    return 1033;
+}
+
+static int is_neural(const char *voice)
+{
+    return !stricmp_ascii(voice, "Eva") || !stricmp_ascii(voice, "Sarah") || !stricmp_ascii(voice, "Matilda");
+}
 
 zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size_t errlen)
 {
@@ -76,6 +94,18 @@ zira_tts *zira_tts_open(const char *data_dir, const char *voice, char *err, size
      * not the en-US one the frontend speaks; translate it so every phone is asked about the model that was
      * trained for it. */
     zf2_voice_set_phone_set(t->vf, zb_voice_phone_set(t->vb));
+    t->lcid = voice_lcid(t->voice);
+    if (is_neural(t->voice)) {
+        char e2[256];
+        t->eva = eva_model_open(vpath, t->lcid, t->vf, e2, sizeof e2);
+        if (!t->eva) {
+            if (err) snprintf(err, errlen, "%s", e2);
+            goto fail;
+        }
+    } else if (!zb_voice_has_acoustics(t->vb)) {
+        if (err) snprintf(err, errlen, "%s.APM lacks LSF/LF0 models", vpath);
+        goto fail;
+    }
     return t;
 fail:
     zira_tts_close(t);
@@ -85,6 +115,7 @@ fail:
 void zira_tts_close(zira_tts *t)
 {
     if (!t) return;
+    if (t->eva) eva_model_close(t->eva);
     if (t->e) zf1_close(t->e);
     if (t->vf) zf2_voice_free(t->vf);
     if (t->vb) zb_voice_free(t->vb);
@@ -209,33 +240,45 @@ static void deliver(speak_ctx *c, const short *pcm, long n)
     }
 }
 
-/* zb_synth hands over the whole utterance at once; split it at the events' phones (the phone's position in the
- * output is its share of the generated frames, which is what the wave stage's own redistribution does too). */
+/* zb_synth streams PCM: the float path hands over one synthesis block per call (tr->block_phone0 says which
+ * phones it covers), the int path the whole utterance.  Events are placed at their phone's share of the
+ * frames in the buffer that carries them, which is what the wave stage's own redistribution does too. */
 static int sink(void *user, const short *pcm, int n)
 {
     speak_ctx *c = (speak_ctx *)user;
     const ZbTrace *tr = c->tr;
     long *cum = NULL, done = 0;
-    int i, p, s;
+    int i, p, s, p0 = 0, pn = 0, p1 = 0;
     if (!c->cb->event) {
         deliver(c, pcm, n);
         return c->stopped;
     }
-    if (tr && tr->dur && tr->nframe > 0 && (cum = (long *)malloc(sizeof(long) * ((size_t)tr->nphone + 1))) != NULL) {
+    if (tr) {
+        p0 = tr->block_phone0;
+        pn = tr->block_phones > 0 ? tr->block_phones : tr->nphone - p0;
+        if (pn < 0) pn = 0;
+        p1 = p0 + pn;
+    }
+    if (tr && tr->dur && tr->nframe > 0 && pn > 0 && (cum = (long *)malloc(sizeof(long) * ((size_t)pn + 1))) != NULL) {
         long f = 0;
-        for (p = 0; p < tr->nphone; p++) {
-            cum[p] = f;
+        for (p = p0; p < p1; p++) {
+            cum[p - p0] = f;
             for (s = 0; s < tr->nstate; s++) f += tr->dur[p * tr->nstate + s];
         }
-        cum[tr->nphone] = f;
+        cum[pn] = f;
     }
     for (i = 0; c->ev && i < c->ev->n && !c->stopped; i++) {
         const zf2_event *e = &c->ev->ev[i];
         long at;
         if (e->id != ZF2_EV_WORD && e->id != ZF2_EV_SENTENCE && e->id != ZF2_EV_BOOKMARK) continue;
+        /* an event for a phone of an earlier block already went out with that block; one for a later block
+         * waits for it (events are in phone order) */
+        if (e->phone >= 0 && e->phone < p0) continue;
+        if (e->phone < 0 && p0 > 0) continue;
+        if (e->phone >= p1) break;
         at = 0;
-        if (cum && e->phone > 0 && e->phone <= tr->nphone && cum[tr->nphone] > 0)
-            at = (long)((double)n * (double)cum[e->phone] / (double)cum[tr->nphone] + 0.5);
+        if (cum && e->phone > 0 && cum[pn] > 0)
+            at = (long)((double)n * (double)cum[e->phone - p0] / (double)cum[pn] + 0.5);
         if (at > n) at = n;
         if (at > done) { deliver(c, pcm + done, at - done); done = at; }
         if (c->stopped) break;
@@ -287,7 +330,26 @@ static int speak_piece(zira_tts *t, speak_ctx *c, const char *piece, int xml, Zb
         memset(&u, 0, sizeof u);
         memset(&ev, 0, sizeof ev);
         memset(&tr, 0, sizeof tr);
-        if (zf2_process(vf, &s, &u, c->cb->event ? &ev : NULL) != 0) {
+        if (t->eva && vb == t->vb) {
+            /* Neural voices: zf2_process's steps, but keeping the sentence tree, which the network's
+             * linguistic features and the prosody models are read from. */
+            zf2_sent *zs = zf2_run(vf, &s);
+            int ok = zs != NULL;
+            if (!zs) rc = -1;
+            else if (zf2_features(zs, &u) != 0) { rc = -1; ok = 0; }
+            else if (c->cb->event && zf2_make_events(zs, &ev) != 0) { rc = -1; ok = 0; }
+            if (ok && u.nphone > 0) {
+                apply_controls(t, &u);
+                c->ev = c->cb->event ? &ev : NULL;
+                c->tr = c->cb->event ? &tr : NULL;
+                int synth_rc = eva_synth(t->eva, vb, zs, &u, &t->sapi, sink, c, c->cb->event ? &tr : NULL);
+                if (synth_rc && !c->stopped && !zb_cancel_load(&t->cancel)) rc = -1;
+                c->ev = NULL;
+                c->tr = NULL;
+                zb_trace_free(&tr);
+            }
+            if (zs) zf2_sent_free(zs);
+        } else if (zf2_process(vf, &s, &u, c->cb->event ? &ev : NULL) != 0) {
             rc = -1;
         } else if (u.nphone > 0) {
             apply_controls(t, &u);

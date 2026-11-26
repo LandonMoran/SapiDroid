@@ -127,25 +127,57 @@ float zb_pow2_24th(int k);
 void zb_dur_rescale(unsigned *sum, unsigned target, int *dur, unsigned n);
 void zb_durations_ex(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
                      int *dur, int *stretch);
+/* The same, with the neural voices' duration histogram equalisation (Sarah): heq == NULL is zb_durations_ex. */
+void zb_durations_heq(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
+                      int *dur, int *stretch, float (*heq)(const void *ctx, float x), const void *heq_ctx, float heq_adj);
 void zb_durations(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
                   int *dur);
 
 /* zb_mlpg.c */
 /* frames: per compact frame the Gaussian (already boundary-zeroed copies), D static dims, nwin 3 */
 void zb_mlpg_float(const ZbModel *m, ZbGauss *const *fr, int T, int D, float *out /*[T*D]*/);
+/* The same from flat precision / mean arrays [T][3][D], which is how the neural back end keeps its frames. */
+void zb_mlpg_float_arr(const ZbModel *m, const float *prec, const float *mp, int T, int D, float *out /*[T*D]*/);
+/* zb_synth.c: exported for the neural back end. */
+void zb_apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T);
+void zb_lsf_repair(float *lsf, int rows, int p);
 
 /* zb_wave.c: post-vocoder SPS wave stage (Sonic rate change + smoother, voice volume, per-phone SAPI volume).
  * pcm: nframes*shift samples of the utterance (after silence zeroing); returns a malloc'ed buffer in *out. */
 long zb_wave_sps(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nstate, const int *stretch,
                  const int *blk, int nblk, const short *pcm, short **out);   /* blk: synthesis blocks (NULL: computed) */
+/* The same stage one synthesis block at a time: the state that spans blocks (rate changer or Sonic stream,
+ * the previous block rate) is in the run, so each block's output is exactly the samples the one-call pass
+ * writes at that position.  zb_wave_next() returns 0 at the end, else 1 with the block's buffer, which
+ * belongs to the run until the next call. */
+typedef struct ZbWaveRun ZbWaveRun;
+ZbWaveRun *zb_wave_begin(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nstate, const int *stretch,
+                         const int *blk, int nblk);
+int zb_wave_next(ZbWaveRun *r, const short *pcm, short **out, long *n);
+void zb_wave_end(ZbWaveRun *r);
 void zb_wave_free(ZbVoice *v);
 float zb_sapi_vol_gain(float x);
 void zb_scale_pcm(short *s, long n, float g);
 
 /* zb_vocoder.c */
 void zb_vocoder_init(ZbVoice *v);
+#define ZB_MBE_MAXBANDS 5
+/* Same as zb_vocoder_float with an explicit LSF order (24 for the HTS voices, 40 for the neural ones). */
+void zb_vocoder_float_p(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
+                        const float *gain, const int *stretch, short *pcm, int p);
+/* The same with the neural voices' multi-band excitation (Sarah): mbe = [T][nb] band strengths, NULL = plain. */
+void zb_vocoder_float_mbe(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
+                          const float *gain, const int *stretch, short *pcm, int p, const float *mbe, int nbands);
 void zb_vocoder_float(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf, const float *gain,
                       const int *stretch, short *pcm);
+/* one synthesis block at a time, into the caller's utterance buffer (T*shift samples); the prepare steps of
+ * a block's LSF rows run just before it.  zb_voc_next() returns 0 at the end, else 1 with the block's sample
+ * offset and count and the phone range it covers (blocks are phone-aligned). */
+typedef struct ZbVocRun ZbVocRun;
+ZbVocRun *zb_voc_begin(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
+                       const float *gain, const int *stretch, short *pcm);
+int zb_voc_next(ZbVocRun *r, long *off, int *n, int *phone0, int *phones);
+void zb_voc_end(ZbVocRun *r);
 int zb_split_blocks(const ZbUtt *u, const int *phfr, int ph0, int nph, const int *stretch, int cap, int *blk);
 
 /* zb_vocoder_int.c / zb_synth_int.c */

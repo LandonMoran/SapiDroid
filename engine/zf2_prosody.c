@@ -250,8 +250,11 @@ void z2_prosody(Z2Sent *s)
     rule_last(s);
     rule_tn_silence(s);
     rule_groups(s);
+    if (s->v && s->v->prosody_hook) s->v->prosody_hook(s->v->prosody_ctx, s, 1);   /* break model (BR2) */
     s->rebuild_flag = 1;
     rule_tones(s);
+    if (s->v && s->v->prosody_hook) s->v->prosody_hook(s->v->prosody_ctx, s, 2);   /* boundary-tone model (TON) */
     rule_list_tones(s);
     rule_accents(s);
+    if (s->v && s->v->prosody_hook) s->v->prosody_hook(s->v->prosody_ctx, s, 3);   /* pitch-accent model (ACL) */
 }

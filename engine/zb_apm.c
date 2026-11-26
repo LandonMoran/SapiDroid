@@ -49,7 +49,9 @@ const char *const zb_feature_path[ZB_NFEAT] = {
     "Phone.Syllable.Word.Phrase.IntonationPhrase.PrevIntonationPhrase.PhraseNumber",
     "Phone.Syllable.Word.Phrase.IntonationPhrase.PrevIntonationPhrase.SyllableNumber",
     "Phone.Syllable.Word.Phrase.IntonationPhrase.PrevIntonationPhrase.ToBIFinalBoundaryTone",
-    "Phone.Syllable.Word.Phrase.IntonationPhrase.PrevIntonationPhrase.WordNumber"};
+    "Phone.Syllable.Word.Phrase.IntonationPhrase.PrevIntonationPhrase.WordNumber",
+    /* the three the neural voices ask for */
+    "Phone.Syllable.ToBIAccent", "Phone.Syllable.PrevSyllable.ToBIAccent", "Phone.Syllable.NextSyllable.ToBIAccent"};
 
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
@@ -267,7 +269,9 @@ int zb_apm_load(ZbVoice *v, const char *path, char *err, int errlen)
         case ZB_M_PDUR: v->m_pdur = m; break;
         }
     }
-    if (!v->m_lsf || !v->m_lf0 || !v->m_dur) { snprintf(err, errlen, "APM lacks LSF/LF0/duration model"); return -1; }
+    /* The neural voices (Eva, Sarah, Matilda) carry a duration model only: their acoustics come from the
+     * .NNM/.TDAT pair and eva_voice.c, so LSF and LF0 are not required here. */
+    if (!v->m_dur) { snprintf(err, errlen, "APM lacks a duration model"); return -1; }
     return 0;
 }
 

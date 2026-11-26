@@ -433,6 +433,17 @@ static int get_value(const Z2Sent *s, Node x, int prop, zf2_value *v)
 }
 
 typedef struct { int nstep; int lv[16], dir[16], skip[16]; int prop; } Path;
+/* The neural voices' NNM spells its feature paths in lower case ("phone.syllable.word.pos"); the engine's
+ * own table is mixed case, so names are compared case-insensitively. */
+static int name_eq(const char *a, const char *b)
+{
+    for (; *a && *b; a++, b++) {
+        int x = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a, y = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+        if (x != y) return 0;
+    }
+    return *a == *b;
+}
+
 static int parse_path(const char *path, Path *p)
 {
     char tok[64];
@@ -448,11 +459,11 @@ static int parse_path(const char *path, Path *p)
         tok[n] = 0;
         if (!e) {
             for (k = 0; k < (int)(sizeof PROP / sizeof PROP[0]); k++)
-                if (!strcmp(PROP[k].name, tok)) { p->prop = PROP[k].id; return 0; }
+                if (name_eq(PROP[k].name, tok)) { p->prop = PROP[k].id; return 0; }
             return -1;
         }
         for (k = 0; k < (int)(sizeof LOC / sizeof LOC[0]); k++)
-            if (!strcmp(LOC[k].name, tok)) break;
+            if (name_eq(LOC[k].name, tok)) break;
         if (k == (int)(sizeof LOC / sizeof LOC[0]) || p->nstep >= 16) return -1;
         p->lv[p->nstep] = LOC[k].level;
         p->dir[p->nstep] = LOC[k].dir;

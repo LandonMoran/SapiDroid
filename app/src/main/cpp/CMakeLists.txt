@@ -40,6 +40,9 @@ set(ENGINE_SOURCES
     ${ENGINE_DIR}/zb_sonic.c
     ${ENGINE_DIR}/zb_wave.c
     ${ENGINE_DIR}/zb_ratechg.c
+    ${ENGINE_DIR}/eva_nn.c
+    ${ENGINE_DIR}/eva_voice.c
+    ${ENGINE_DIR}/eva_crf.c
 )
 
 set(ANNA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/anna)

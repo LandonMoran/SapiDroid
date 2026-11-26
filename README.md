@@ -68,6 +68,11 @@ shared `MSTTSLocEnUS.dat`, from
 the three files per voice the engine loads; Windows keeps `.NUS` tables beside
 them, which it does not read.
 
+The neural voices (Eva, Sarah and Matilda, the "Cortana" ones) also need
+`M1033<Voice>.nnm` and `.tdat` beside those three files, and Sarah and Matilda a
+`.heq`; Eva's `.br2`, `.ton` and `.acl` add her prosody models. Windows writes
+those names in mixed case, which the engine accepts.
+
 Mark is the Windows 10/11 voice; copy his three files and he appears in the voice
 list. The shared table is not optional: the engine opens it whichever voice it
 speaks with, so a voice without it cannot start. Any OneCore voice whose files
@@ -85,13 +90,16 @@ the app is open, so picking more voices costs nothing, and it is deleted when
 the app closes.
 
 Included are David, Zira and Mark (American English), George, Susan and Hazel
-(British English), James and Catherine (Australian English), and Richard and
-Linda (Indian English). Every pick also installs `MSTTSLocEnUS.dat`, the shared
-table the engine reads with every voice, so a downloaded voice works on its own
-and appears in the app's voice list at once.
+(British English), James and Catherine (Australian English), Richard and Linda
+(Indian English), and the neural voices Eva (American English), Sarah (British
+English) and Matilda (Australian English). Every pick also installs
+`MSTTSLocEnUS.dat`, the shared table the engine reads with every voice, so a
+downloaded voice works on its own and appears in the app's voice list at once.
 
-Three voices in the bundle are not offered because the engine cannot load their
-model format: Sarah and Eva, and Matilda.
+Eva, Sarah and Matilda are the Windows "Cortana" voices: their model has
+durations only, and their sound is predicted by a small neural network that
+comes in the same bundle as `.nnm`/`.tdat` files. The download copies every one
+of those files with the voice, and the engine runs the network itself.
 
 ### Anna
 

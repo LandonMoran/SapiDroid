@@ -26,11 +26,15 @@ static void fir_valid(const float *restrict h, const float *restrict x, float *r
 /* silence zeroing (FUN_180009b14 / FUN_180074968): silence phones are zeroed from state s0 to s1 inclusive; with
  * SilenceNoiseSuppress = 0 an inner pause keeps its first and last two states (s0 = s1 = 2), an edge silence is zeroed
  * up to the neighbouring silence/utterance edge */
-void zb_silence_zero(const ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, short *pcm)
+/* Silence zeroing (FUN_180009b14 / FUN_180074968) for phones [ph0, ph0+nph); pcm offset 0 is the first
+ * sample of ph0.  Synthesis blocks are phone-aligned, so zeroing block by block covers exactly the ranges
+ * one whole-buffer pass would. */
+static void silence_zero_range(const ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int ph0, int nph,
+                               short *pcm)
 {
     const int shift = v->shift;
-    int ph, off;
-    for (ph = 0, off = 0; ph < u->nphone; ph++) {
+    int ph, off = 0;
+    for (ph = ph0; ph < ph0 + nph; ph++) {
         const int *d = dur + ph * nstate;
         int s, tot = 0;
         for (s = 0; s < nstate; s++) tot += d[s];
@@ -47,6 +51,11 @@ void zb_silence_zero(const ZbVoice *v, const ZbUtt *u, const int *dur, int nstat
         }
         off += tot;
     }
+}
+
+void zb_silence_zero(const ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, short *pcm)
+{
+    silence_zero_range(v, u, dur, nstate, 0, u->nphone, pcm);
 }
 
 void zb_vocoder_init(ZbVoice *v)
@@ -156,7 +165,9 @@ static void lsf_respace(float *x, unsigned n)  /* FUN_18006c18c */
         if (i < n) linfill(x + i, n - i, x[(int)i - 1], hi);
     }
 }
-void zb_lsf_repair(float *lsf, int rows, int p)
+/* rows in order; have_prev = the row before this slice exists and is already repaired (a slice that
+ * starts inside an utterance rather than at its first frame) */
+static void repair_rows(float *lsf, int rows, int p, int have_prev)
 {
     int r, k;
     for (r = 0; r < rows; r++) {
@@ -175,10 +186,14 @@ void zb_lsf_repair(float *lsf, int rows, int p)
         for (k = 0; k < p; k++)
             if (x[k] < 0.0f || 0.5f < x[k]) { bad = 1; break; }
         if (bad) {
-            if (r) memcpy(x, x - p, sizeof(float) * p);
+            if (have_prev || r) memcpy(x, x - p, sizeof(float) * p);
             else lsf_respace(x, (unsigned)p);
         }
     }
+}
+void zb_lsf_repair(float *lsf, int rows, int p)
+{
+    repair_rows(lsf, rows, p, 0);
 }
 
 /* ---------------------------------------------------------------- excitation */
@@ -380,50 +395,99 @@ int zb_split_blocks(const ZbUtt *u, const int *phfr, int ph0, int nph, const int
     return nb;
 }
 
+/* ---------------------------------------------------------------- one synthesis block at a time */
+/* The engine vocodes in blocks of phones and only the state inside the run (pulse position, FIR history,
+ * filter memory) has to span them, so a block's samples do not depend on a later block existing.  The
+ * prepare steps are per row and are done for a block's rows just before it, which leaves every sample
+ * identical to one whole-utterance pass. */
+struct ZbVocRun {
+    ZbVoice *v;
+    const ZbUtt *u;
+    const int *dur;
+    int nstate, T, shift, p;
+    const float *f0;
+    float *lsf;
+    const float *gain;
+    const int *stretch;
+    short *pcm;
+    float *exc, hist[64];
+    ZbExcState st;
+    int *phfr, *blk, nb, b, ph, f, cap;
+};
+
+ZbVocRun *zb_voc_begin(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
+                       const float *gain, const int *stretch, short *pcm)
+{
+    ZbVocRun *r = (ZbVocRun *)calloc(1, sizeof *r);
+    int ph, s, row;
+    if (!r) return NULL;
+    r->v = v; r->u = u; r->dur = dur; r->nstate = nstate; r->T = T; r->shift = v->shift; r->p = 24;
+    r->f0 = f0; r->lsf = lsf; r->gain = gain; r->stretch = stretch; r->pcm = pcm;
+    /* prepare FUN_18010ca5c: whole utterance in one chunk: head = tail = 10 */
+    if (20 < T) {
+        for (row = 0; row < 10; row++) memcpy(lsf + row * r->p, lsf + 10 * r->p, sizeof(float) * r->p);
+        for (row = T - 10; row < T; row++) memcpy(lsf + row * r->p, lsf + (T - 11) * r->p, sizeof(float) * r->p);
+    } else {
+        memset(lsf, 0, sizeof(float) * (size_t)T * r->p);
+        memset((float *)gain, 0, sizeof(float) * (size_t)T);
+    }
+    r->exc = (float *)malloc(sizeof(float) * (size_t)(T > 0 ? (long)T * r->shift : 1));
+    memset(&r->st, 0, sizeof r->st);
+    memset(r->hist, 0, sizeof r->hist);
+    r->phfr = (int *)calloc((size_t)u->nphone + 1, sizeof(int));
+    r->blk = (int *)calloc((size_t)u->nphone + 1, sizeof(int));
+    if (!r->exc || !r->phfr || !r->blk) { zb_voc_end(r); return NULL; }
+    for (ph = 0; ph < u->nphone; ph++) {
+        for (s = 0; s < nstate; s++) r->phfr[ph] += dur[ph * nstate + s];
+        if (r->cap < r->phfr[ph]) r->cap = r->phfr[ph];
+    }
+    r->nb = zb_split_blocks(u, r->phfr, 0, u->nphone, stretch, r->cap, r->blk);
+    return r;
+}
+
+/* Vocode the next block.  Returns 0 at the end, else 1 and the block's sample offset, sample count and
+ * phone range. */
+int zb_voc_next(ZbVocRun *r, long *off, int *n, int *phone0, int *phones)
+{
+    int nf = 0, k, row;
+    if (!r || r->b >= r->nb) return 0;
+    for (k = 0; k < r->blk[r->b]; k++) nf += r->phfr[r->ph + k];
+    /* LsfSharpen and the repair are per row: a block's rows are ready when the block is */
+    for (row = r->f; row < r->f + nf; row++) lsf_sharpen(&r->v->cfg, r->lsf + (size_t)row * r->p, r->p);
+    repair_rows(r->lsf + (size_t)r->f * r->p, nf, r->p, r->f > 0);
+    *off = (long)r->f * r->shift;
+    *n = nf * r->shift;
+    *phone0 = r->ph;
+    *phones = r->blk[r->b];
+    excitation(r->v, &r->st, r->f0 + r->f, nf, nf * r->shift, r->shift, r->exc + (size_t)r->f * r->shift);
+    synth(r->lsf + (size_t)r->f * r->p, r->p, r->gain + r->f, r->exc + (size_t)r->f * r->shift, nf, r->shift, r->hist,
+          r->pcm + (size_t)r->f * r->shift);
+    silence_zero_range(r->v, r->u, r->dur, r->nstate, r->ph, r->blk[r->b], r->pcm + (size_t)r->f * r->shift);
+    r->ph += r->blk[r->b];
+    r->f += nf;
+    r->b++;
+    return 1;
+}
+
+void zb_voc_end(ZbVocRun *r)
+{
+    if (!r) return;
+    free(r->exc);
+    free(r->phfr);
+    free(r->blk);
+    free(r);
+}
+
 void zb_vocoder_float(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf, const float *gain,
                       const int *stretch, short *pcm)
 {
-    const ZbConfig *cfg = &v->cfg;
-    const int p = 24, shift = v->shift, n = T * shift;
-    float *exc, hist[64];
-    ZbExcState st;
-    int r, *phfr, *blk, nb, b, ph, cap = 0, f = 0;
-    /* prepare FUN_18010ca5c: whole utterance in one chunk: head = tail = 10 */
-    if (20 < T) {
-        for (r = 0; r < 10; r++) memcpy(lsf + r * p, lsf + 10 * p, sizeof(float) * p);
-        for (r = T - 10; r < T; r++) memcpy(lsf + r * p, lsf + (T - 11) * p, sizeof(float) * p);
-    } else {
-        memset(lsf, 0, sizeof(float) * (size_t)T * p);
-        memset((float *)gain, 0, sizeof(float) * (size_t)T);
+    ZbVocRun *r = zb_voc_begin(v, u, dur, nstate, T, f0, lsf, gain, stretch, pcm);
+    long off;
+    int n, ph0, nph;
+    if (!r) return;
+    while (zb_voc_next(r, &off, &n, &ph0, &nph)) {
     }
-    for (r = 0; r < T; r++) lsf_sharpen(cfg, lsf + r * p, p);
-    zb_lsf_repair(lsf, T, p);
-    /* excitation + synthesis */
-    exc = (float *)malloc(sizeof(float) * (size_t)(n ? n : 1));
-    memset(&st, 0, sizeof st);
-    memset(hist, 0, sizeof hist);
-    phfr = (int *)calloc((size_t)u->nphone + 1, sizeof(int));
-    blk = (int *)calloc((size_t)u->nphone + 1, sizeof(int));
-    for (ph = 0; ph < u->nphone; ph++) {
-        for (r = 0; r < nstate; r++) phfr[ph] += dur[ph * nstate + r];
-        if (cap < phfr[ph]) cap = phfr[ph];
-    }
-    nb = zb_split_blocks(u, phfr, 0, u->nphone, stretch, cap, blk);
-    for (b = 0, ph = 0; b < nb; b++) {
-        int nf = 0, k;
-        for (k = 0; k < blk[b]; k++) nf += phfr[ph + k];
-        ph += blk[b];
-        excitation(v, &st, f0 + f, nf, nf * shift, shift, exc + (size_t)f * shift);
-        synth(lsf + (size_t)f * p, p, gain + f, exc + (size_t)f * shift, nf, shift, hist, pcm + (size_t)f * shift);
-        f += nf;
-    }
-    free(phfr);
-    free(blk);
-    free(exc);
-    zb_silence_zero(v, u, dur, nstate, pcm);
-    /* voice volume (FUN_18001fedc: SpsVolumeAdjustment when the voice has NUS domain data) */
-    /* voice volume and SAPI volume: zb_wave_sps() (after the waveform rate stage) */
-
+    zb_voc_end(r);
 }
 
 /* per-phone SAPI volume (FUN_18006d71c), applied segment by segment */
@@ -439,4 +503,149 @@ void zb_apply_sapi_volume(const ZbUtt *u, const int *dur, int nstate, int shift,
         }
         off += tot;
     }
+}
+/* ---------------------------------------------------------------- neural voices (Eva, Sarah, Matilda) */
+/* The neural voices use the same vocoder at a larger LSF order (40 rather than 24), and Sarah's excitation has
+ * five band strengths that the network predicts per frame; zb_vocoder_float() is the order-24, no-MBE case. */
+
+/* tap weights of the five bands (zb_band41) for one frame's band strengths vb[0..4] in 0..1 */
+static void mbe_taps(const float *vb, float *hv, float *hu)
+{
+    int k, b;
+    for (k = 0; k < 41; k++) {
+        double dv = 0.0, du = 0.0;
+        for (b = 0; b < 5; b++) {
+            double w = (double)vb[b];
+            dv = dv + w * zb_band41[b][k];
+            du = du + (1.0 - w) * zb_band41[b][k];
+        }
+        hv[k] = (float)dv;
+        hu[k] = (float)du;
+    }
+}
+
+/* excitation() with per-frame band strengths: the periodic part uses hv, the noise part hu */
+static void excitation_mbe(ZbVoice *v, ZbExcState *st, const float *f0, const float *mbe, int nb, int nfr, int n, int shift,
+                           float *out)
+{
+    int *mark = (int *)calloc((size_t)n + 1, sizeof(int));
+    int i, s = 0, m, k;
+    float g = shift == 40 ? v->g40 : shift == 80 ? v->g80 : 0.0f, hv[41], hu[41], vb[5];
+    unsigned char prev[41];
+    if (!mark) return;
+    for (i = 0; i < nfr && s < n; i++, s += shift) {
+        float f = f0[i];
+        if (f <= 3.0f) f = 0.0f;
+        else {
+            int T;
+            if (st->prevf0 <= 3.0f) { mark[s] = 1; st->last = s; }
+            T = (int)((float)v->rate / f);
+            if (T) {
+                for (m = s; m < s + shift; m++) {
+                    unsigned kk = (unsigned)(m - st->last) / (unsigned)T, q;
+                    if (kk >= 1) {
+                        int step = T, base = st->last;
+                        for (q = 0; q < kk; q++) {
+                            int pos = step + base;
+                            if (pos < 0) mark[0] = 1;
+                            else if (pos < n) mark[pos] = 1;
+                            step += T;
+                            st->last = m;
+                            base = m;
+                        }
+                    }
+                }
+            }
+        }
+        st->prevf0 = f;
+    }
+    st->last -= n;
+    for (k = 0; k < 41; k++) prev[k] = st->hist_valid ? st->hist[k] : 0;
+    for (i = 0; (i + 1) * shift <= n; i++) {
+        float *o = out + i * shift;
+        const int *mk = mark + i * shift;
+        int b;
+        for (b = 0; b < 5; b++) vb[b] = (i < nfr && b < nb) ? mbe[(size_t)i * nb + b] : 0.0f;
+        mbe_taps(vb, hv, hu);
+        for (k = 0; k < shift; k++) o[k] = 0.0f;
+        for (m = 0; m < 41; m++)
+            if (prev[m])
+                for (k = 0; k < 41; k++)
+                    if (m + k >= 41 && m + k - 41 < shift) o[m + k - 41] = hv[k] + o[m + k - 41];
+        for (m = 0; m < shift; m++)
+            if (mk[m])
+                for (k = 0; k < 41 && m + k < shift; k++) o[m + k] = hv[k] + o[m + k];
+        for (k = 0; k < 41; k++) {
+            int src = shift - 41 + k;
+            prev[k] = (unsigned char)(src >= 0 ? mk[src] != 0 : prev[src + 41]);
+        }
+        {
+            int r = zb_rand(v);
+            if (i < nfr && f0[i] > 3.0f) {
+                const float *x = v->noise + r % (1024 - (shift + 40));
+                for (m = 0; m < shift; m++) {
+                    double acc = 0.0;
+                    for (k = 0; k < 41; k++) acc = acc + (double)(x[m + 40 - k] * hu[k]);
+                    o[m] = g * (float)acc + o[m];
+                }
+            } else {
+                int off = r % (1024 - shift);
+                for (m = 0; m < shift; m++) o[m] = g * v->noise[off + m];
+            }
+        }
+    }
+    memcpy(st->hist, prev, 41);
+    st->hist_valid = 1;
+    free(mark);
+}
+
+void zb_vocoder_float_p(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
+                        const float *gain, const int *stretch, short *pcm, int p)
+{
+    zb_vocoder_float_mbe(v, u, dur, nstate, T, f0, lsf, gain, stretch, pcm, p, NULL, 0);
+}
+
+void zb_vocoder_float_mbe(ZbVoice *v, const ZbUtt *u, const int *dur, int nstate, int T, const float *f0, float *lsf,
+                          const float *gain, const int *stretch, short *pcm, int p, const float *mbe, int nbands)
+{
+    const ZbConfig *cfg = &v->cfg;
+    const int shift = v->shift, n = T * shift;
+    float *exc, hist[64];
+    ZbExcState st;
+    int r, *phfr, *blk, nb, b, ph, cap = 0, f = 0;
+    if (T <= 0) return;
+    /* prepare FUN_18010ca5c: whole utterance in one chunk: head = tail = 10 */
+    if (20 < T) {
+        for (r = 0; r < 10; r++) memcpy(lsf + r * p, lsf + 10 * p, sizeof(float) * p);
+        for (r = T - 10; r < T; r++) memcpy(lsf + r * p, lsf + (T - 11) * p, sizeof(float) * p);
+    } else {
+        memset(lsf, 0, sizeof(float) * (size_t)T * p);
+        memset((float *)gain, 0, sizeof(float) * (size_t)T);
+    }
+    for (r = 0; r < T; r++) lsf_sharpen(cfg, lsf + r * p, p);
+    zb_lsf_repair(lsf, T, p);
+    exc = (float *)malloc(sizeof(float) * (size_t)(n ? n : 1));
+    memset(&st, 0, sizeof st);
+    memset(hist, 0, sizeof hist);
+    phfr = (int *)calloc((size_t)u->nphone + 1, sizeof(int));
+    blk = (int *)calloc((size_t)u->nphone + 1, sizeof(int));
+    if (!exc || !phfr || !blk) { free(exc); free(phfr); free(blk); return; }
+    for (ph = 0; ph < u->nphone; ph++) {
+        for (r = 0; r < nstate; r++) phfr[ph] += dur[ph * nstate + r];
+        if (cap < phfr[ph]) cap = phfr[ph];
+    }
+    nb = zb_split_blocks(u, phfr, 0, u->nphone, stretch, cap, blk);
+    for (b = 0, ph = 0; b < nb; b++) {
+        int nf = 0, k;
+        for (k = 0; k < blk[b]; k++) nf += phfr[ph + k];
+        ph += blk[b];
+        if (mbe) excitation_mbe(v, &st, f0 + f, mbe + (size_t)f * nbands, nbands, nf, nf * shift, shift, exc + (size_t)f * shift);
+        else excitation(v, &st, f0 + f, nf, nf * shift, shift, exc + (size_t)f * shift);
+        synth(lsf + (size_t)f * p, p, gain + f, exc + (size_t)f * shift, nf, shift, hist, pcm + (size_t)f * shift);
+        f += nf;
+    }
+    free(phfr);
+    free(blk);
+    free(exc);
+    silence_zero_range(v, u, dur, nstate, 0, u->nphone, pcm);
 }

@@ -110,6 +110,14 @@ zf2_voice *zf2_voice_load(const char *voicepath)
 }
 void zf2_voice_free(zf2_voice *v) { free(v); }
 void zf2_voice_set_phone_set(zf2_voice *v, int phone_set) { if (v) v->phone_set = phone_set; }
+/* the neural voices' statistical prosody models: called after the break (1), boundary-tone (2) and
+ * pitch-accent (3) rules; hook == NULL restores the rules-only behaviour. */
+void zf2_voice_set_prosody_hook(zf2_voice *v, void (*hook)(void *ctx, void *sent, int stage), void *ctx)
+{
+    if (!v) return;
+    v->prosody_hook = hook;
+    v->prosody_ctx = hook ? ctx : NULL;
+}
 
 /* ---- conversion ---- */
 static int zlen(const zf_char *s) { int n = 0; if (s) while (s[n]) n++; return n; }

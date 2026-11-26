@@ -38,6 +38,9 @@ void zb_voice_free(ZbVoice *v)
 }
 
 int zb_voice_is_int(const ZbVoice *v) { return v->isint; }
+/* 1 when the APM carries the LSF and LF0 models. The neural voices (Eva, Sarah, Matilda) have a duration-only
+ * APM: their acoustics come from eva_voice.c, and zb_synth() refuses them. */
+int zb_voice_has_acoustics(const ZbVoice *v) { return v->m_lsf && v->m_lf0; }
 
 void zb_trace_free(ZbTrace *t)
 {
@@ -178,7 +181,7 @@ static int lookup(ZbVoice *v, const ZbUtt *u, ZbUttModels *um, const volatile in
 }
 
 /* FUN_18001b100 (pitch) + FUN_1800a2810 (range); the SAPI controls plus the emotion recipe (ZbStyle, zb.h) */
-static void apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
+void zb_apply_pitch(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const int *dur, int nst, float *f0, int T)
 {
     const ZbConfig *cfg = &v->cfg;
     int pa_adj = zb_style_pct(cfg->pitch_adj, sapi ? sapi->style.pitch : 0);
@@ -234,11 +237,11 @@ int zb_synth_cancelable(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write
     int *vuv = NULL;
     float *w = NULL, *lf0 = NULL, *lsf = NULL, *gain = NULL, *f0c = NULL;
     ZbGauss **fr = NULL, *pool = NULL;
-    short *pcm = NULL, *wav = NULL;
+    short *pcm = NULL;
     int *stretch = NULL;
-    long nwav = 0;
     const int D = 24;
     if (cancel && zb_cancel_load(cancel)) return 1;
+    if (!v->m_lsf || !v->m_lf0) return -1;   /* duration-only APM: eva_voice.c synthesizes these voices */
     if (v->isint) return zb_synth_int(v, u, sapi, write, user, trace, cancel);
     memset(&um, 0, sizeof um);
     k = lookup(v, u, &um, cancel);
@@ -290,23 +293,40 @@ int zb_synth_cancelable(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write
     for (t = 0; t < T; t++)
         if (lf0[t] != 0.0f) lf0[t] = (float)exp((double)lf0[t]);
     zb_lsf_repair(lsf, T, D);
-    apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
+    zb_apply_pitch(v, u, sapi, um.dur, ns, lf0, T);
     if (trace) {
         trace->f0 = (float *)malloc(sizeof(float) * (T + 1)); memcpy(trace->f0, lf0, sizeof(float) * T);
         trace->lsf_fin = (float *)malloc(sizeof(float) * (T * D + 1)); memcpy(trace->lsf_fin, lsf, sizeof(float) * T * D);
     }
-    /* vocoder */
+    /* vocoder and waveform stage, one synthesis block at a time: the first block reaches the sink while the
+     * rest of the utterance is still being synthesized, so the time before the first PCM no longer includes
+     * every later block.  The state that spans blocks lives in the two runs and in the voice, so every sample
+     * is the one the one-call pass wrote at that position. */
     if (cancel && zb_cancel_load(cancel)) { rc = 1; goto done; }
     pcm = (short *)calloc((size_t)T * v->shift + 1, sizeof(short));
-    zb_vocoder_float(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm);
-    if (cancel && zb_cancel_load(cancel)) { zb_srand(v, 0x406); rc = 1; goto done; }
-    nwav = zb_wave_sps(v, u, sapi, um.dur, ns, stretch, NULL, 0, pcm, &wav);   /* rate stage, voice + SAPI volume */
+    {
+        ZbVocRun *vr = zb_voc_begin(v, u, um.dur, ns, T, lf0, lsf, gain, stretch, pcm);
+        ZbWaveRun *wr = zb_wave_begin(v, u, sapi, um.dur, ns, stretch, NULL, 0);
+        if (vr && wr) {
+            long off;
+            int n, ph0, nph;
+            rc = 0;
+            while (zb_voc_next(vr, &off, &n, &ph0, &nph)) {
+                short *out = NULL;
+                long nout = 0;
+                if (!zb_wave_next(wr, pcm, &out, &nout)) break;
+                if (trace) { trace->block_phone0 = ph0; trace->block_phones = nph; }
+                if (write && nout > 0 && write(user, out, (int)nout)) { rc = 1; break; }
+                if (cancel && zb_cancel_load(cancel)) { rc = 1; break; }
+            }
+        }
+        zb_voc_end(vr);
+        zb_wave_end(wr);
+    }
     zb_srand(v, 0x406);   /* end-of-utterance vocoder reset (FUN_18011024c) */
-    rc = 0;
-    if (write && nwav) rc = write(user, wav, (int)nwav);
 done:
     free(um.gdur); free(um.gpdur); free(um.glf0); free(um.glsf); free(um.ggain); free(um.dur);
-    free(w); free(vuv); free(lf0); free(f0c); free(lsf); free(gain); free(fr); free(pool); free(pcm); free(wav); free(stretch);
+    free(w); free(vuv); free(lf0); free(f0c); free(lsf); free(gain); free(fr); free(pool); free(pcm); free(stretch);
     return rc;
 }
 

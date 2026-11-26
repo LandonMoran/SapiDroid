@@ -34,6 +34,8 @@ object VoiceCatalog {
         Info(Engine.ONECORE, "David", "David (OneCore)"),
         Info(Engine.ONECORE, "Zira", "Zira (OneCore)"),
         Info(Engine.ONECORE, "Mark", "Mark (OneCore)"),
+        // The neural (Cortana) voices: duration APM + .nnm/.tdat acoustics.
+        Info(Engine.ONECORE, "Eva", "Eva (OneCore)"),
         // Microsoft Speech Platform 11 packs, which this engine also reads.
         Info(Engine.ONECORE, "Hazel", "Hazel (OneCore)", Locale("en", "GB")),
         Info(Engine.ONECORE, "Hayley", "Hayley (OneCore)", Locale("en", "AU")),

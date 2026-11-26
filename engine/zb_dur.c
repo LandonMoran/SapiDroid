@@ -124,6 +124,15 @@ void zb_durations(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const Zb
 void zb_durations_ex(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
                      int *dur, int *stretch)
 {
+    zb_durations_heq(v, u, sapi, gd, gp, nstate, dur, stretch, NULL, NULL, 0.0f);
+}
+
+/* The same, with the neural voices' duration histogram equalisation (Sarah): for a non-silence phone
+ * T = heq(T) * a + (1 - a) * T with a = DurationHeqAdjustment / 100, and with a table and a != 0 the per-phone
+ * frame limit is skipped.  heq == NULL is exactly zb_durations_ex. */
+void zb_durations_heq(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const ZbGauss *gd, const ZbGauss *gp, int nstate,
+                      int *dur, int *stretch, float (*heq)(const void *ctx, float x), const void *heq_ctx, float heq_adj)
+{
     const ZbConfig *cfg = &v->cfg;
     int p, i;
     float carry = 0.0f;
@@ -143,6 +152,10 @@ void zb_durations_ex(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const
             if (P <= (float)nstate) P = (float)nstate;
             T = (P - S) * cfg->pdur_weight + S;
         }
+        if (heq && !c->is_sil && !c->is_pause) {   /* duration HEQ (Sarah) */
+            float h = heq(heq_ctx, T) * heq_adj, r = (1.0f - heq_adj) * T;
+            T = h + r;
+        }
         if (0.0f < V) rho = (T - S) / V;
 #ifdef ZB_DUR_CARRY_RESET
         carry = 0.0f;
@@ -159,7 +172,7 @@ void zb_durations_ex(const ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, const
         }
         if (1.0 < fabs((double)carry)) zb_dur_rescale(&sum, (unsigned)(int)(T + 0.5f), d, (unsigned)nstate);
         limit = c->is_pause ? 80u : (unsigned)cfg->max_frames;
-        if (limit < sum) zb_dur_rescale(&sum, limit, d, (unsigned)nstate);
+        if (!(heq && heq_adj != 0.0f) && limit < sum) zb_dur_rescale(&sum, limit, d, (unsigned)nstate);   /* (no limit with a HEQ) */
         i = dur_rate(v, c, sapi, &sum, d, (unsigned)nstate);
         if (stretch) stretch[p] = i;
     }

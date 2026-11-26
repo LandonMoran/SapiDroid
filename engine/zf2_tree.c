@@ -50,6 +50,18 @@ int z2_phone_local(int id, int phone_set)
 }
 static uint32_t pflags(int id) { return id > 0 && id < Z2_MAXPH ? z2_phone_flags[id] : 0; }
 
+/* Vowel class (flags bit 0) of a phone id in the voice's own database: the flag table describes the en-US ids,
+ * so an en-GB id is mapped back first.  The neural voices need this for the excitation band strengths. */
+int z2_phone_is_vowel(int id, int phone_set)
+{
+    int i;
+    if (id <= 0) return 0;
+    if (phone_set == ZB_PHONES_EN_GB)
+        for (i = 1; i < (int)(sizeof gb_id_from_us / sizeof gb_id_from_us[0]); i++)
+            if (gb_id_from_us[i] && gb_id_from_us[i] == id) { id = i; break; }
+    return pflags(id) & 1u ? 1 : 0;
+}
+
 /* ---- word predicates ---- */
 int z2_is_break(const Z2W *w) { return w->type == 3; }
 int z2_is_sapi_silence(const Z2Sent *s, const Z2W *w)

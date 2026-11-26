@@ -222,6 +222,13 @@ the median, but a single-kernel change still needs a dedicated before/after buil
 - The host numbers come from x86-64 GCC; the app is Clang for ARM. They compare code fairly, they
   are not device timings.
 
+`bench/latency_bench.c` is the end-to-end counterpart: it opens a real voice pack, runs one sentence
+through the same stages `speak_piece` runs, and prints the time from the engine call to the first
+`write()` (its model of `speak:first_pcm`) followed by a table that splits the one-call pipeline into
+frontend, predictors, vocoder and waveform stages. It needs voice data — pass the folder holding
+`M1033<Voice>.APM`, `M1033<Voice>.INI` and `MSTTSLocENUs.dat` — so it is not part of CI; build it as
+its header describes and compare two binaries by running them alternately, like the kernel A/B.
+
 The OneCore frontend has its own benchmark, because it needs a sentence rather than a voice pack:
 `bench/zf2_bench.c` builds a synthetic word/syllable/phone tree, runs `zf2_features` over it and
 prints ns per phone. Its output is *not* compared with the original: this fork deliberately resolves
@@ -291,8 +298,11 @@ What each row is (count, total, average and worst sample per row):
 - `load:voice` — opening the voice (parsing the pack). Only paid by a request that had to open it;
   the worker keeps voices open, so most requests show 0 or no row at all.
 - `speak:text` — decoding the text argument into UTF-8/CP1252, once per chunk.
-- `speak:first_pcm` — engine call start to the first PCM block reaching the sink: frontend plus
-  warm-up, the closest thing to "time before sound", once per chunk.
+- `speak:first_pcm` — engine call start to the first PCM block reaching the sink: frontend plus the
+  work the engine has to do before it can emit a block, the closest thing to "time before sound",
+  once per chunk. The OneCore float path (David) now writes one synthesis block at a time, so this
+  no longer contains every later block of the sentence; SAPI 4, SAPI 5, Anna and the OneCore
+  fixed-point path (Zira, Mark) still hand over the whole utterance at once.
 - `speak:call` — the engine call itself, wall clock, once per chunk. It contains
   `jni:pcm_copy` and `audio:queue_push`, and includes the time it spends blocked on a full queue,
   so compare it with `audio:queue_push` to see how much is synthesis and how much is the engine

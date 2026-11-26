@@ -112,6 +112,11 @@ enum {
     ZB_F_PrevIPSyllableNumber,             /* ...IntonationPhrase.PrevIntonationPhrase.SyllableNumber */
     ZB_F_PrevIPToBITone,                   /* ...IntonationPhrase.PrevIntonationPhrase.ToBIFinalBoundaryTone */
     ZB_F_PrevIPWordNumber,                 /* ...IntonationPhrase.PrevIntonationPhrase.WordNumber */
+    /* The neural voices (Eva, Matilda) ask for the three ToBI accent questions below, which the HTS voices
+     * never do. Appended after the Speech Platform 11 block, so no existing column number moves. */
+    ZB_F_SylToBIAccent,                    /* Phone.Syllable.ToBIAccent */
+    ZB_F_PrevSylToBIAccent,                /* Phone.Syllable.PrevSyllable.ToBIAccent */
+    ZB_F_NextSylToBIAccent,                /* Phone.Syllable.NextSyllable.ToBIAccent */
     ZB_NFEAT
 };
 extern const char *const zb_feature_path[ZB_NFEAT];   /* full dotted APM path per column */
@@ -209,6 +214,7 @@ const char *zb_emotion_name(const ZbVoice *v, int i);
 ZbVoice *zb_voice_load(const char *voicepath, char *err, int errlen);
 void zb_voice_free(ZbVoice *v);
 int zb_voice_is_int(const ZbVoice *v);     /* 0 = float path (David), 1 = fixed-point path (Zira, Mark) */
+int zb_voice_has_acoustics(const ZbVoice *v);  /* 0 for the neural voices, whose APM has only durations */
 
 /* Which English phone database a voice's acoustic models were trained with. Microsoft numbers the phones
 differently in the en-US/en-IN database and in the one the en-GB and en-AU voices use: AA is 7 in the first and
@@ -233,10 +239,16 @@ typedef struct {
     float *f0;          /* [nframe] final F0 in Hz (after export/pitch) */
     float *lsf_fin;     /* [nframe*order] final LSF (after export) */
     int *ilf0, *ilsf, *igain, *if0; /* int path equivalents (raw engine integers) */
+    /* set before each write() of a streamed utterance: the phones whose samples that buffer covers, so a
+     * sink that places events by phone knows which buffer they fall in.  block_phones == 0: one call with
+     * the whole utterance (the int path, or a caller that never sets them). */
+    int block_phone0, block_phones;
 } ZbTrace;
 void zb_trace_free(ZbTrace *t);
 
-/* Synthesize one sentence (utterance). Streams PCM to write(). Returns 0 on success. */
+/* Synthesize one sentence (utterance). Streams PCM to write(): the float path calls it once per synthesis
+ * block as the block is produced (see ZbTrace.block_phone0), the int path once with the whole utterance.
+ * Returns 0 on success. */
 int zb_synth(ZbVoice *v, const ZbUtt *u, const ZbSapi *sapi, zb_write_fn write, void *user, ZbTrace *trace);
 /* Like zb_synth, but returns 1 promptly when cancel becomes nonzero. Concurrent writers must use
  * atomic integer stores (for example __atomic_store_n with GCC/Clang, or InterlockedExchange on Windows). */

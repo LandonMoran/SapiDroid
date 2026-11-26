@@ -43,8 +43,13 @@ class OneCoreVoicesActivity : Activity() {
     /** Usable only with the voice's own files and the shared table beside them. */
     private fun installed(pack: OneCorePacks.Pack): Boolean {
         val dir = File(DeviceStorage.context(this).filesDir, "voice")
-        return File(dir, "M1033${pack.voice}.APM").isFile &&
-            File(dir, SappleVoices.SHARED_DATA).isFile
+        /* The bundle spells its file names in mixed case (Sarah's .nnm/.tdat are lower case), so the
+         * look-up is case-insensitive. */
+        val names = dir.list()?.map { it.lowercase() } ?: return false
+        fun has(name: String) = name.lowercase() in names
+        if (!has("M1033${pack.voice}.APM") || !has(SappleVoices.SHARED_DATA)) return false
+        if (pack.neural) return has("M1033${pack.voice}.nnm") && has("M1033${pack.voice}.tdat")
+        return true
     }
 
     private fun refresh() {

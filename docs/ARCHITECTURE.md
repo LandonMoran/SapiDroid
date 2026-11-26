@@ -201,6 +201,27 @@ en-US numbering and are not translated. The three en-US phones with no
 counterpart there map to their GB spelling: `-SP-` to `-SIL-`, `AO` to `OO`
 ("thought" = TH OO T) and `Y` to `J` ("yes" = J EH S).
 
+## The neural voices
+
+Eva, Sarah and Matilda (the Windows "Cortana" voices) are not HTS voices. Their
+APM carries a duration model only; the spectrum, pitch, gain and voicing come
+from a network whose layer stack is in `.tdat` and whose inputs, output streams
+and precision are described by `.nnm`. `eva_nn.c` loads and runs that network
+(a dense/LSTM "CMLP" stack, int8 or int16 weights), `eva_voice.c` builds its 400+
+linguistic features from the `zf2` sentence tree, runs the network over the
+phone durations, and then feeds the result to the same float LSF vocoder as the
+other voices, at the network's own order (40 for Eva and Sarah, 24 for Matilda).
+Eva also ships `.br2`/`.ton`/`.acl`, CRF models that replace the rule-based
+breaks, boundary tones and pitch accents; they run through
+`zf2_voice_set_prosody_hook`. `zb_synth` refuses these voices (`zb_voice_has_acoustics`
+is false) and `zira_tts` sends them to `eva_synth` instead.
+
+The neural back end is MIT-licensed code from the engine Sapple vendors
+(`Engine/onecore` in `Quinton1110/Sapple`, reconstructed from
+`MSTTSEngine_OneCore.dll`); the voice data is still Microsoft's and is never
+committed. `eva_nn.c` and the voctab tables must be built with the same
+`-ffp-contract=off` flags as the rest of the engine.
+
 ## Where to change what
 
 - **A new voice on an existing engine** — add it to `VoiceCatalog` (and to

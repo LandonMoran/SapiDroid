@@ -17,6 +17,8 @@ extern const uint32_t z2_phone_flags[Z2_MAXPH];
 int z2_phone_id(const char *name, int len);       /* -1 unknown */
 /* en-US phone id -> the id of the same phone in the voice's own database (ZB_PHONES_*, see zb.h) */
 int z2_phone_local(int id, int phone_set);
+/* 1 when the voice-database phone id is a vowel (its flags bit 0). */
+int z2_phone_is_vowel(int id, int phone_set);
 
 /* pause classes (index into the SilenceLength table 0x180170f00) */
 enum { Z2_PC_WORD, Z2_PC_INTERM, Z2_PC_PUNCINTERM, Z2_PC_NONPUNCIP, Z2_PC_PARALIP, Z2_PC_PARALLISTIP, Z2_PC_IP, Z2_PC_SENT };
@@ -34,6 +36,10 @@ struct zf2_voice {
     int phoneme_events_native; /* VoiceSetting.TtsPhonemeEvents */
     int phone_set;          /* ZB_PHONES_* the acoustic models use (zf2_voice_set_phone_set) */
     char name[64];
+    /* The neural voices' statistical prosody models, run where the engine runs its own model runners: after
+     * the break rules (1), the boundary-tone rules (2) and the pitch-accent rules (3). NULL otherwise. */
+    void (*prosody_hook)(void *ctx, void *sent, int stage);
+    void *prosody_ctx;
 };
 
 /* ---- the tree ---- */
