@@ -191,6 +191,7 @@ jobs:
           "$ADB" start-server
           nohup "$SDK/emulator/emulator" -avd profile -no-window -no-audio -no-snapshot \
             -gpu swiftshader_indirect -memory 2048 -partition-size 4096 \
+            -dns-server 8.8.8.8,1.1.1.1 -netdelay none -netspeed full \
             > "$RUNNER_TEMP/emulator.log" 2>&1 &
           timeout 240 "$ADB" wait-for-device && echo "device visible to adb"
           booted=0
@@ -226,9 +227,17 @@ jobs:
 
           echo "== let the app fetch the voice data"
           start_app --es getdata sapi5
-          wait_for "SAPI 5 voice data" /data/user_de/0/org.sapidroid.tts/files/sapi5/Sam.spd 900
+          if ! wait_for "SAPI 5 voice data" /data/user_de/0/org.sapidroid.tts/files/sapi5/Sam.spd 600; then
+            echo "retrying the SAPI 5 download"
+            start_app --es getdata sapi5
+            wait_for "SAPI 5 voice data" /data/user_de/0/org.sapidroid.tts/files/sapi5/Sam.spd 600
+          fi
           start_app --es getdata onecore --es voice David
-          wait_for "OneCore David" /data/user_de/0/org.sapidroid.tts/files/voice/M1033David.APM 1200
+          if ! wait_for "OneCore David" /data/user_de/0/org.sapidroid.tts/files/voice/M1033David.APM 600; then
+            echo "retrying the OneCore download"
+            start_app --es getdata onecore --es voice David
+            wait_for "OneCore David" /data/user_de/0/org.sapidroid.tts/files/voice/M1033David.APM 900
+          fi
 
           echo "== profile"
           SENTENCE="The quick brown fox jumps over the lazy dog while the band plays a long, steady tune."
