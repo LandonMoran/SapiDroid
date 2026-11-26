@@ -31,8 +31,8 @@ android {
         applicationId = "org.sapidroid.tts"
         minSdk = 26
         targetSdk = 34
-        versionCode = versionCodeOverride ?: 14
-        versionName = versionNameOverride ?: "0.11.0"
+        versionCode = versionCodeOverride ?: 15
+        versionName = versionNameOverride ?: "0.12.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
