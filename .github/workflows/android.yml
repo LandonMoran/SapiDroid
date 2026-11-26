@@ -264,3 +264,24 @@ jobs:
         with:
           name: sapidroid-profile-run
           path: ${{ runner.temp }}/profile-run/
+
+  profile-report:
+    # The numbers are the point of the run above. This job only downloads the pulled file and prints
+    # it, so the table lands at the top of a fresh log instead of under a build's worth of output.
+    needs: profile-on-emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sapidroid-profile-run
+      - name: Print the per-request tables and the ranked totals
+        run: |
+          set -eu
+          if [ ! -f profiling.txt ]; then echo "no profiling.txt in the artifact"; exit 1; fi
+          echo "== ranked: every point, summed over all requests"
+          awk 'NF==6 && $1!="point" && $1!="===" { c[$1]+=$2; t[$1]+=$3 }
+               END { for (k in t) printf "%-20s %6d %10.2f ms\n", k, c[k], t[k] }' profiling.txt \
+            | sort -k3,3 -nr | head -25
+          echo "== tables: $(grep -c '=== profile' profiling.txt || true)"
+          sed -n '1,300p' profiling.txt
