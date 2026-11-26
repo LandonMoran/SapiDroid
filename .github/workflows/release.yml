@@ -114,6 +114,21 @@ jobs:
             exit 1
           fi
 
+      - name: Collect the release notes
+        # A tag can carry hand-written notes in docs/releases/<tag>.md (what changed and what it
+        # measured); without one the release keeps the standing note below. Either way GitHub appends
+        # its generated list of commits and pull requests after this text.
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          if [ -f "docs/releases/${{ steps.version.outputs.tag }}.md" ]; then
+            cp "docs/releases/${{ steps.version.outputs.tag }}.md" "$notes"
+          else
+            printf 'Signed with the same release key as earlier versions, so it installs over them.\n\n' > "$notes"
+            printf 'Pick `app-arm64-v8a-release.apk` for virtually every current phone, or the universal\n' >> "$notes"
+            printf 'APK if you are unsure. Voice data is not included; install it from the app.\n' >> "$notes"
+          fi
+          echo "notes: $(wc -l < "$notes") lines"
+
       - name: Attach the APKs to the release
         uses: softprops/action-gh-release@v2
         with:
@@ -122,8 +137,4 @@ jobs:
           files: app/build/outputs/apk/release/*.apk
           fail_on_unmatched_files: true
           generate_release_notes: true
-          body: |
-            Signed with the same release key as earlier versions, so it installs over them.
-
-            Pick `app-arm64-v8a-release.apk` for virtually every current phone, or the universal
-            APK if you are unsure. Voice data is not included; install it from the app.
+          body_path: ${{ runner.temp }}/release-notes.md

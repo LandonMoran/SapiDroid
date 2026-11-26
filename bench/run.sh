@@ -54,10 +54,15 @@ build_variant() {
     $CC $COMMON $opt -include "$d/anna_dec_wmav.c" -I"$d" "$ROOT/bench/anna_bench.c" -lm -o "$OUT/anna_$prefix"
 
     d=$tree/engine
+    # zb_synth_int.c is pulled in for the integer MLPG (its kernels are static). -ffunction-sections
+    # plus --gc-sections drop the parts of it the benchmark does not call, so the engine routines it
+    # would otherwise need a link to (durations, the waveform stage) do not have to be stubbed out.
     # shellcheck disable=SC2086
-    $CC $COMMON $opt -include "$ROOT/bench/onecore_stub.c" -include "$ROOT/bench/onecore_wrap_float.c" \
+    $CC $COMMON $opt -ffunction-sections -fdata-sections -DONECORE_HAVE_SYNTH_INT \
+        -include "$ROOT/bench/onecore_stub.c" -include "$ROOT/bench/onecore_wrap_float.c" \
         -include "$ROOT/bench/onecore_wrap_int.c" -include "$ROOT/bench/onecore_wrap_sonic.c" \
-        -I"$d" "$ROOT/bench/onecore_bench.c" -lm -o "$OUT/oc_$prefix"
+        -include "$ROOT/bench/onecore_wrap_synth.c" \
+        -I"$d" "$ROOT/bench/onecore_bench.c" -Wl,--gc-sections -lm -o "$OUT/oc_$prefix"
 }
 
 build_variant ours "$ROOT" "$OURS_FLAGS"

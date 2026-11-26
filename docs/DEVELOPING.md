@@ -164,7 +164,9 @@ build; bit-exactness depends on them being off.
 **Cut a release.** The release is built and published by
 `.github/workflows/release.yml`. Bump `versionCode` and `versionName` in
 `app/build.gradle.kts` (a local build uses them; the workflow overrides both
-from the tag), make sure CI is green, then push a tag:
+from the tag), write the notes in `docs/releases/<tag>.md` (the workflow copies
+that file into the release body when it exists), make sure CI is green, then
+push a tag:
 
 ```bash
 git tag v0.11.0
@@ -198,9 +200,9 @@ with a universal APK for anyone who is unsure.
 
 `sh bench/run.sh` clones the original `devinprater/SapiDroid` into `/tmp` and builds three variants
 with the same compiler: the original at the `-O2` it shipped with, the original at this repository's
-flags (`-O3 -fno-math-errno`), and this repository. It measures 41 kernels across all four engines
+flags (`-O3 -fno-math-errno`), and this repository. It measures 43 kernels across all four engines
 (every DSP leaf, the LPC/LSF stages, both post-filters, the FFTs, the transcendental emulations, the
-voice effects, Sonics and the vocoder) and prints ns per sample or per call with an FNV digest of
+voice effects, the OneCore MLPG, Sonics and the vocoder) and prints ns per sample or per call with an FNV digest of
 each output, so the report shows whether the three builds agree bit for bit. Nothing is written
 inside the repository.
 

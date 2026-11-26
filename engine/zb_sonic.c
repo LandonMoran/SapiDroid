@@ -45,18 +45,26 @@ static void grow_out(ZbSonic *s, int need)
     }
 }
 
-/* FUN_180085cd0: AMDF over [minp, maxp], unsigned 32-bit products as in the engine */
+/* FUN_180085cd0: AMDF over [minp, maxp], unsigned 32-bit products as in the engine.
+ * The sum is of unsigned 16-bit differences, so it cannot overflow (maxp <= 246 of them, each below
+ * 2^16) and unsigned addition is associative: four accumulators, combined at the end, give the same
+ * diff as the single one they replace. That also lets the compiler vectorise the difference loop. */
+static unsigned short amdf_diff(short a, short b) { return a < b ? (unsigned short)(b - a) : (unsigned short)(a - b); }
+
 static int period_in_range(const short *x, int minp, int maxp, unsigned *mindiff_o, unsigned *maxdiff_o)
 {
     unsigned best = 0, mind = 1, worst = 255, maxd = 0;
     int p, i;
     for (p = minp; p <= maxp; p++) {
-        unsigned diff = 0;
-        for (i = 0; i < p; i++) {
-            short a = x[i], b = x[i + p];
-            unsigned short d = a < b ? (unsigned short)(b - a) : (unsigned short)(a - b);
-            diff += d;
+        unsigned d0 = 0, d1 = 0, d2 = 0, d3 = 0, diff;
+        for (i = 0; i + 4 <= p; i += 4) {
+            d0 += amdf_diff(x[i + 0], x[i + p + 0]);
+            d1 += amdf_diff(x[i + 1], x[i + p + 1]);
+            d2 += amdf_diff(x[i + 2], x[i + p + 2]);
+            d3 += amdf_diff(x[i + 3], x[i + p + 3]);
         }
+        for (; i < p; i++) d0 += amdf_diff(x[i], x[i + p]);
+        diff = (d0 + d1) + (d2 + d3);
         if (!((unsigned)p * mind <= diff * best)) { mind = diff; best = (unsigned)p; }
         if (!(diff * worst <= (unsigned)p * maxd)) { maxd = diff; worst = (unsigned)p; }
     }

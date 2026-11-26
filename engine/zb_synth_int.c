@@ -91,9 +91,13 @@ static int build_iframes(const ZbModel *m, const ZbIG *st, const int *dur, int n
 static double fabs_d(double x) { return x < 0 ? -x : x; }
 #define GUARD(x) do { if (fabs_d((x) - 0.0) <= 1e-6) (x) = 1.0; } while (0)
 
-/* FUN_18000c0f0, generic branch, one output dimension d. out: [T][D] ints. stream: 1 LSF, 2 F0. */
+/* FUN_18000c0f0, generic branch, one output dimension d. out: [T][D] ints. stream: 1 LSF, 2 F0.
+ * c16tab[j][x] holds the Q4 window coefficients the loop below already computed as
+ * (int)(win[j][x] * 16.0f): they depend only on the model, so imlpg() converts them once instead of
+ * once per inner iteration. The arithmetic is unchanged; only the repeated float multiply and
+ * float->int conversion are gone, and P*c16 (fixed for the whole k loop) is computed once. */
 static void imlpg_dim(const ZbModel *m, ZbIG *const *fr, int T, int D, int d, int stream, int32_t (*Wi)[3], double (*W)[3],
-                      int64_t *R, int64_t *g, int32_t *out)
+                      int64_t *R, int64_t *g, int32_t *out, const int c16tab[ZB_MAXWIN][5])
 {
     int t, j, i, k, run;
     const int width = 3;
@@ -105,14 +109,14 @@ static void imlpg_dim(const ZbModel *m, ZbIG *const *fr, int T, int D, int d, in
         for (j = 0; j < m->nwin; j++, idx += D) {
             int wj = m->winw[j], half = wj / 2, left = -half, right = wj - 1 - half;
             for (i = left; i <= right; i++) {
-                float cf = m->win[j][half - i];
-                if (cf != 0.0f && t + i >= 0 && t + i < T) {
-                    int c16 = (int)(cf * 16.0f), P = fr[t + i]->p[idx], n = right + 1 + i;
+                if (m->win[j][half - i] != 0.0f && t + i >= 0 && t + i < T) {
+                    int c16 = c16tab[j][half - i], P = fr[t + i]->p[idx], n = right + 1 + i;
+                    int64_t pc = (int64_t)(int32_t)(P * c16) >> 4;
                     r += (((int64_t)(P >> 1) * fr[t + i]->m[idx]) * (int64_t)c16) >> 4;
                     if (T - t < n) n = T - t;
                     if (wj < n) n = wj;
                     for (k = 0; k < n; k++)
-                        Wi[t][k] += (int)(((int64_t)(int)(m->win[j][half - i + k] * 16.0f) * ((int64_t)(int32_t)(P * c16) >> 4)) >> 4);
+                        Wi[t][k] += (int)(((int64_t)c16tab[j][half - i + k] * pc) >> 4);
                 }
             }
         }
@@ -182,13 +186,16 @@ static void imlpg(const ZbModel *m, ZbIG *const *fr, int T, int D, int stream, i
     int32_t (*Wi)[3];
     double (*W)[3];
     int64_t *R, *g;
-    int d;
+    int c16tab[ZB_MAXWIN][5];
+    int d, j, k;
     if (T <= 0) return;
+    for (j = 0; j < m->nwin; j++)
+        for (k = 0; k < 5; k++) c16tab[j][k] = (int)(m->win[j][k] * 16.0f);
     Wi = (int32_t (*)[3])malloc(sizeof(int32_t) * 3 * (size_t)T);
     W = (double (*)[3])malloc(sizeof(double) * 3 * (size_t)T);
     R = (int64_t *)malloc(sizeof(int64_t) * (size_t)T);
     g = (int64_t *)malloc(sizeof(int64_t) * (size_t)T);
-    for (d = 0; d < D; d++) imlpg_dim(m, fr, T, D, d, stream, Wi, W, R, g, out);
+    for (d = 0; d < D; d++) imlpg_dim(m, fr, T, D, d, stream, Wi, W, R, g, out, c16tab);
     free(Wi); free(W); free(R); free(g);
 }
 

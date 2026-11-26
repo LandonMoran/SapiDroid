@@ -21,6 +21,7 @@ static void (*volatile call_isynth)(ZbVoice *, const int32_t *, int, const int32
     isynth;
 static void (*volatile call_scale_pcm)(short *, long, float) = zb_scale_pcm;
 static void (*volatile call_lsf_repair)(float *, int, int) = zb_lsf_repair;
+static void (*volatile call_imlpg)(const ZbModel *, ZbIG *const *, int, int, int, int32_t *) = imlpg;
 
 static uint32_t rng_state = 0x6d2b79f5u;
 static uint32_t rnd(void)
@@ -196,11 +197,52 @@ static void bench_lsf_repair(void)
     report("onecore.lsf_repair", t1 - t0, (double)ROWS * R, digest(lsf, sizeof lsf));
 }
 
+/* the integer MLPG (FUN_18000c0f0): the band window / W^T P W pass that runs for every output
+ * dimension of every LSF chunk, which is the largest single piece of arithmetic on the Zira / Mark
+ * path. Frames are synthetic but of the shape the engine builds them in: three 3-wide windows per
+ * frame, int64 means and positive Q precisions. */
+static void bench_mlpg(void)
+{
+    enum { T = 64, D = 24, R = 4000 };
+    ZbModel m;
+    ZbIG *fr[T];
+    ZbIG *pool = (ZbIG *)calloc(T, sizeof(ZbIG));
+    int32_t out[T * D];
+    int i, j, k, r;
+    memset(&m, 0, sizeof m);
+    m.nwin = 3;
+    for (j = 0; j < 3; j++) m.winw[j] = 3;
+    /* the standard delta / delta-delta windows, as ZbModel carries them */
+    m.win[0][0] = -0.5f; m.win[0][1] = 0.0f; m.win[0][2] = 0.5f;
+    m.win[1][0] = -0.5f; m.win[1][1] = 0.0f; m.win[1][2] = 0.5f;
+    m.win[2][0] = 1.0f; m.win[2][1] = -2.0f; m.win[2][2] = 1.0f;
+    for (i = 0; i < T; i++) {
+        fr[i] = &pool[i];
+        for (k = 0; k < 3 * D; k++) {
+            pool[i].m[k] = (int64_t)(rnd() % 200001u) - 100000;
+            pool[i].p[k] = (int32_t)(1 + rnd() % 4096u);
+        }
+        pool[i].w = 12000;
+    }
+    memset(out, 0, sizeof out);
+    {
+        double t0 = now();
+        for (r = 0; r < R; r++) {
+            fr[0]->m[0] += r;   /* defeat hoisting the whole call out of the loop */
+            call_imlpg(&m, fr, T, D, 1, out);
+        }
+        double t1 = now();
+        report("onecore.mlpg", t1 - t0, (double)T * D * R, digest(out, sizeof out));
+    }
+    free(pool);
+}
+
 int main(void)
 {
     bench_fir();
     bench_float();
     bench_int();
+    bench_mlpg();
     bench_sonic();
     bench_scale_pcm();
     bench_lsf_repair();
