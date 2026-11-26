@@ -1,6 +1,9 @@
 /* eva_nn.c - Eva's acoustic network (M1033Eva.TDAT), reconstructed from MSTTSEngine_OneCore.dll 10.3.21207.
  * Function addresses are VAs in that DLL (image base 0x180000000).  See notes/eva_dnn.md.
  * Keep -ffp-contract=off: every float statement below mirrors one SSE scalar instruction sequence. */
+/* fileno() is POSIX: ask for it explicitly, or a compiler that treats implicit declarations as errors
+ * (GCC 14 and later) rejects this file. */
+#define _POSIX_C_SOURCE 200809L
 #include "eva_nn.h"
 #include <stdio.h>
 #include <stdlib.h>
