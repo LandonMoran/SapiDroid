@@ -98,7 +98,7 @@ class MainActivity : Activity() {
                     if (pack != null) {
                         Thread {
                             try {
-                                SappleVoices.installVoice(this, pack.voice, pack.prefix) { m ->
+                                SappleVoices.installVoice(this, pack.voice, pack.prefix, pack.neural) { m ->
                                     runOnUiThread { resultText.text = m }
                                 }
                                 runOnUiThread {

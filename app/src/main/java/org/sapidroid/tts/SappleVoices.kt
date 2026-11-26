@@ -34,6 +34,9 @@ object SappleVoices {
 
     private const val APP = "Payload/Sapple.app/PlugIns/ClassicVoicesExtension.appex/"
 
+    /** The two files a neural voice's sound is predicted from, beside its APM durations. */
+    private val NEURAL = listOf("nnm", "tdat")
+
     /** Device-protected storage, shared with the engine for Direct Boot. */
     private fun store(context: Context): Context = DeviceStorage.context(context)
 
@@ -71,33 +74,75 @@ object SappleVoices {
     /**
      * One voice's own files, renamed to the M1033<voice> form the engine reads.
      * [prefix] is the name the bundle gives them, such as M2057George.
+     *
+     * A neural voice ([neural]) is unusable without the network (`.nnm`) and data
+     * (`.tdat`) that predict its sound, so both are required here rather than
+     * hoped for: the bundle carries them beside the voice's APM, and they are
+     * copied with it, looked up by voice name if the bundle spells the prefix
+     * differently, and reported as an error if they cannot be found at all. A
+     * voice is never left installed with durations but no acoustics.
      */
     fun installVoice(
         context: Context,
         voice: String,
         prefix: String,
+        neural: Boolean = false,
         progress: (String) -> Unit
     ): List<String> {
         val ipa = ensure(context, progress)
         val out = File(store(context).filesDir, "voice").also { it.mkdirs() }
         val written = mutableListOf<String>()
         java.util.zip.ZipFile(ipa).use { zip ->
-            val entries = zip.entries().toList()
-                .filter { it.name.startsWith(APP + "OneCoreVoice/$prefix.") }
+            /* Sapple mixes the case of these names (Eva's M1033Eva.NNM/.TDAT, Sarah's
+             * M2057Sarah.nnm/.tdat), so they are matched without regard to it. */
+            val entries = zip.entries().toList().filter {
+                !it.isDirectory &&
+                    it.name.lowercase().startsWith((APP + "OneCoreVoice/$prefix.").lowercase())
+            }
             if (entries.isEmpty()) throw java.io.IOException("$prefix is not in the bundle")
+            progress("Unpacking ${voice}'s files…")
             for (entry in entries) {
-                val ext = entry.name.substringAfterLast('.')
-                val dest = File(out, "M1033$voice.$ext")
-                dest.delete()
-                zip.getInputStream(entry).use { input ->
-                    FileOutputStream(dest).use { output -> input.copyTo(output, 1 shl 16) }
+                written += extract(zip, entry, out, "M1033$voice.${entry.name.substringAfterLast('.')}")
+            }
+            if (neural) {
+                for (ext in NEURAL) {
+                    if (written.any { it.substringAfterLast('.').equals(ext, ignoreCase = true) }) continue
+                    /* Not carried under this voice's prefix: take the bundle's file of that kind
+                     * whose name is this voice's, so the .nnm/.tdat still arrive. */
+                    val alt = zip.entries().toList().firstOrNull { e ->
+                        !e.isDirectory &&
+                            e.name.lowercase().contains("/onecorevoice/") &&
+                            e.name.lowercase().endsWith(".$ext") &&
+                            e.name.lowercase().contains(voice.lowercase())
+                    } ?: throw java.io.IOException(
+                        "$voice needs $prefix.$ext, and Sapple's bundle has no such file"
+                    )
+                    progress("Unpacking ${voice}'s .$ext file…")
+                    written += extract(zip, alt, out, "M1033$voice.$ext")
                 }
-                written += dest.name
+                /* An empty file would read as installed and then fail to speak. */
+                for (ext in NEURAL) {
+                    val name = written.first { it.substringAfterLast('.').equals(ext, ignoreCase = true) }
+                    val f = File(out, name)
+                    if (!f.isFile || f.length() == 0L) {
+                        throw java.io.IOException("$voice's .$ext file did not arrive intact")
+                    }
+                }
             }
             if (installSharedData(zip, out)) written += SHARED_DATA
         }
         Log.i(TAG, "$voice installed from Sapple: $written")
         return written
+    }
+
+    /** Copies one bundle entry to [out] under [name], returning the file's name. */
+    private fun extract(zip: java.util.zip.ZipFile, entry: java.util.zip.ZipEntry, out: File, name: String): String {
+        val dest = File(out, name)
+        dest.delete()
+        zip.getInputStream(entry).use { input ->
+            FileOutputStream(dest).use { output -> input.copyTo(output, 1 shl 16) }
+        }
+        return dest.name
     }
 
     /**
@@ -109,6 +154,9 @@ object SappleVoices {
         val existing = File(out, SHARED_DATA)
         if (existing.isFile && existing.length() > 0) return false
         val entry = zip.getEntry(APP + "OneCoreVoice/" + SHARED_DATA)
+            ?: zip.entries().toList().firstOrNull {
+                it.name.equals(APP + "OneCoreVoice/" + SHARED_DATA, ignoreCase = true)
+            }
             ?: throw java.io.IOException("$SHARED_DATA is not in the bundle")
         val part = File(out, "$SHARED_DATA.part")
         part.delete()

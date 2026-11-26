@@ -95,7 +95,13 @@ class OneCoreVoicesActivity : Activity() {
                         "your own use.",
                     "The voice's files, and ${SappleVoices.SHARED_DATA}, the shared table " +
                         "the engine reads with every voice, are unpacked into this app's " +
-                        "private storage. The bundle itself is deleted when the app closes."
+                        "private storage. The bundle itself is deleted when the app closes." +
+                        if (pack.neural) {
+                            System.lineSeparator() + System.lineSeparator() +
+                                "${pack.voice} is neural, so ${pack.prefix}.nnm (its network) " +
+                                "and ${pack.prefix}.tdat (its data) are downloaded and " +
+                                "installed with it; without those two it could not speak."
+                        } else ""
                 ).joinToString(System.lineSeparator() + System.lineSeparator())
             )
             .setPositiveButton("Download") { _, _ -> download(pack) }
@@ -108,14 +114,19 @@ class OneCoreVoicesActivity : Activity() {
         list.isEnabled = false
         Thread {
             try {
-                SappleVoices.installVoice(this, pack.voice, pack.prefix) { message ->
+                val files = SappleVoices.installVoice(this, pack.voice, pack.prefix, pack.neural) { message ->
                     runOnUiThread { status.text = message }
                 }
                 runOnUiThread {
                     status.text = "${pack.voice} is installed."
                     list.isEnabled = true
                     refresh()
-                    status.text = "${pack.voice} is installed. Choose another, or close."
+                    status.text = "${pack.voice} is installed" + when {
+                        !pack.neural -> ". Choose another, or close."
+                        files.any { it.endsWith(".nnm", true) } && files.any { it.endsWith(".tdat", true) } ->
+                            " with its .nnm and .tdat neural files. Choose another, or close."
+                        else -> ". Choose another, or close."
+                    }
                 }
             } catch (t: Throwable) {
                 android.util.Log.e(TAG, "OneCore pack download failed", t)

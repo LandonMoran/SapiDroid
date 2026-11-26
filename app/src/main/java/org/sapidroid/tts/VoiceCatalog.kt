@@ -148,10 +148,19 @@ object VoiceCatalog {
                 .all { File(anna, "M1033DSK.$it").isFile }
         }
 
+        /**
+         * A OneCore file, in either case: Sapple ships Sarah's and Matilda's neural
+         * files lower case and Eva's from Windows upper case.
+         */
+        private fun voiceFile(name: String): Boolean =
+            File(oneCore, name).let { it.isFile && it.length() > 0 } ||
+                oneCore.list()?.any { it.equals(name, ignoreCase = true) } == true
+
         fun has(info: Info): Boolean = when (info.engine) {
-            Engine.ONECORE -> shared && listOf("APM", "INI").all {
-                File(oneCore, "M1033${info.name}.$it").isFile
-            }
+            Engine.ONECORE -> shared && listOf("APM", "INI").all { voiceFile("M1033${info.name}.$it") } &&
+                /* A neural voice without its network and data would only produce durations. */
+                (OneCorePacks.byVoice(info.name)?.neural != true ||
+                    listOf("nnm", "tdat").all { voiceFile("M1033${info.name}.$it") })
             Engine.ANNA -> annaReady
             Engine.SAPI4 -> sapi4Ready
             Engine.SAPI5 -> sapi5Ready && listOf("spd", "sdf").all {
